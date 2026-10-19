@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -24,13 +27,42 @@ jobs:
           dotnet-version: '9.0.x'
 
       - name: Publish QuickSTRM
-        run: dotnet publish -c Release -o ./publish
+        run: dotnet publish -c Release -o ./publish/QuickSTRM
 
-      - name: Package Plugin
+      # Packages artifacts with strict validation against bundled runtime libraries
+      - name: Verify and Package Release Artifacts
         run: |
-          cd ./publish
-          zip -r ../QuickSTRM.zip .
-          cd ..
+          if ls ./publish/QuickSTRM/Jellyfin.*.dll 1> /dev/null 2>&1 || ls ./publish/QuickSTRM/MediaBrowser.*.dll 1> /dev/null 2>&1; then
+            echo "ERROR: Jellyfin runtime assemblies detected in publish output. ExcludeAssets=runtime is violated!"
+            exit 1
+          fi
+
+          cp meta.json ./publish/QuickSTRM/
+          cp build.yaml ./publish/QuickSTRM/
+
+          # Recursively zip all contents including hidden files without flattening intended structures
+          cd ./publish/QuickSTRM
+          zip -r ../../QuickSTRM.zip .
+          cd ../../
+
+          cp ./publish/QuickSTRM/QuickSTRM.dll ./QuickSTRM.dll
+
+      - name: Extract Release Notes
+        id: notes
+        run: |
+          VERSION="${{ github.ref_name }}"
+          CLEAN_VER="${VERSION#v}"
+          
+          # Use Fgrep/Awk literal matching to prevent bracket regex interpretation
+          if grep -Fq "## [$CLEAN_VER]" CHANGELOG.md; then
+            awk -v ver="## [$CLEAN_VER]" '
+              index($0, ver) == 1 { flag=1; next }
+              flag && index($0, "## [") == 1 { flag=0 }
+              flag { print }
+            ' CHANGELOG.md > RELEASE_NOTES.md
+          else
+            cp CHANGELOG.md RELEASE_NOTES.md
+          fi
 
       - name: Update Manifest Checksum and Timestamp
         run: |
@@ -67,4 +99,7 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
-          files: QuickSTRM.zip
+          body_path: RELEASE_NOTES.md
+          files: |
+            QuickSTRM.zip
+            QuickSTRM.dll

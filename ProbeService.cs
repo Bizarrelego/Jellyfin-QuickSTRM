@@ -395,10 +395,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                         "QuickSTRM: Circuit breaker TRIPPED after {Count} consecutive failures. Queue processing and auto-deletion halted; retrying automatically in {Minutes} minutes (or reset manually)",
                         n,
                         CircuitCooldown.TotalMinutes);
-                    Notify(
-                        "QuickSTRM Circuit Breaker Tripped",
-                        $"Cloud mount down. Retrying in {CircuitCooldown.TotalMinutes:0} minutes.",
-                        LogLevel.Error);
+                    Notify($"Circuit Breaker Tripped - Cloud mount down. Retrying in {CircuitCooldown.TotalMinutes:0} minutes.");
                 }
             }
         }
@@ -455,10 +452,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     Interlocked.Exchange(ref _circuitTrippedAtTicks, 0);
                     _circuitTripped = false;
                     _logger.LogInformation("QuickSTRM: Half-open trial succeeded; circuit breaker closed, queue processing resumed");
-                    Notify(
-                        "QuickSTRM Circuit Breaker Reset",
-                        "Cloud mount restored.",
-                        LogLevel.Information);
+                    Notify("Circuit Breaker Reset - Cloud mount restored.");
                 }
                 else
                 {
@@ -475,25 +469,25 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     // fire-and-forget admin notification in Jellyfin's activity log; never allowed to throw into the probe path
-    private void Notify(string name, string overview, LogLevel severity)
+    private void Notify(string message)
     {
         _ = Task.Run(async () =>
         {
             try
             {
-                await _activityManager.CreateAsync(new Jellyfin.Database.Implementations.Entities.ActivityLog
+                await _activityManager.CreateAsync(new Jellyfin.Database.Implementations.Entities.ActivityLog(
+                    "QuickSTRM",
+                    "System",
+                    Guid.Empty
+                )
                 {
-                    Name = name,
-                    Overview = overview,
-                    ShortOverview = overview,
-                    Type = "System",
-                    Severity = severity,
+                    Overview = message,
                     DateCreated = DateTime.UtcNow
                 }).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "QuickSTRM: Could not publish activity notification '{Name}'", name);
+                _logger.LogWarning(ex, "QuickSTRM: Could not publish activity notification: {Message}", message);
             }
         });
     }
