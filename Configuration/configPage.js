@@ -17,10 +17,47 @@ export default function (view) {
     var progressBar = view.querySelector('#probeProgressBar');
     var lblCurrentItem = view.querySelector('#lblCurrentItem');
     var chkAutoProbe = view.querySelector('#chkEnableAutoProbe');
+    var chkAutoDelete = view.querySelector('#chkEnableAutoDelete');
+    var txtMarker = view.querySelector('#txtMountMarkerFileName');
+    var circuitBanner = view.querySelector('#circuitBreakerBanner');
+    var circuitStatus = view.querySelector('#circuitBreakerStatus');
     var form = view.querySelector('.quickStrmConfigurationForm');
 
     var pollTimer = null;
     var queuePollTimer = null;
+    var countdownTimer = null;
+    var cooldownEndsAt = 0;
+    var circuitState = 'Closed';
+
+    // Renders the auto-recovery status; re-run every second so the countdown moves between the 3s server polls
+    function renderCircuit() {
+        if (circuitState === 'Closed') {
+            circuitBanner.style.display = 'none';
+            return;
+        }
+        circuitBanner.style.display = 'block';
+        var left = Math.max(0, Math.ceil((cooldownEndsAt - Date.now()) / 1000));
+        if (circuitState === 'Open' && left > 0) {
+            var m = Math.floor(left / 60);
+            var s = left % 60;
+            circuitStatus.textContent = 'Auto-recovery: next connectivity test in ' + m + ':' + (s < 10 ? '0' : '') + s + '.';
+        } else {
+            circuitStatus.textContent = 'Auto-recovery: testing connectivity now (half-open). One probe is being allowed through.';
+        }
+    }
+
+    function startCountdown() {
+        if (!countdownTimer) {
+            countdownTimer = setInterval(renderCircuit, 1000);
+        }
+    }
+
+    function stopCountdown() {
+        if (countdownTimer) {
+            clearInterval(countdownTimer);
+            countdownTimer = null;
+        }
+    }
 
     // ── Helpers ──
 
@@ -46,6 +83,10 @@ export default function (view) {
         apiGet('QuickStrm/Queue').then(function (data) {
             lblQueue.textContent = data.Waiting + data.Running;
             lblQueueDetail.textContent = data.Waiting + ' waiting / ' + data.Running + ' running';
+            circuitState = data.CircuitState || (data.CircuitTripped ? 'Open' : 'Closed');
+            cooldownEndsAt = Date.now() + (data.CooldownSecondsRemaining || 0) * 1000;
+            renderCircuit();
+            startCountdown();
 
             // Background persistence starts independently of the probe task (e.g. when someone presses play), so keep a light
             // 3s poll running while this page is visible; it is stopped on viewhide
@@ -78,6 +119,8 @@ export default function (view) {
     function loadConfig() {
         ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             chkAutoProbe.checked = config.EnableAutoProbe;
+            chkAutoDelete.checked = !!config.EnableAutoDelete;
+            txtMarker.value = config.MountMarkerFileName || '';
         });
     }
 
@@ -138,6 +181,8 @@ export default function (view) {
         e.preventDefault();
         ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             config.EnableAutoProbe = chkAutoProbe.checked;
+            config.EnableAutoDelete = chkAutoDelete.checked;
+            config.MountMarkerFileName = txtMarker.value.trim();
             ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
                 Dashboard.processPluginConfigurationUpdateResult();
             });
@@ -156,5 +201,6 @@ export default function (view) {
     view.addEventListener('viewhide', function () {
         stopPolling();
         stopQueuePolling();
+        stopCountdown();
     });
 }

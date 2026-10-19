@@ -133,9 +133,27 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             // probe succeeds, times out or fails; otherwise a slow stream would be retried inline (and time out) on every play
             persistNeeded = true;
 
+            // pre-flight 500ms HEAD: a dead host (404/502/timeout) drops straight to the unprobed fallback and is negative-cached,
+            // so neither the 5s inline budget nor an ffprobe slot of the 2-slot gate is wasted; a tripped breaker also skips probing
+            var probeService = _probeServiceFactory();
+            if (probeService.IsCircuitTripped)
+            {
+                // breaker open: no inline probe. Enqueue the background persist instead; it refuses during the cooldown, and after it
+                // the pipeline admits exactly one half-open trial that must fully succeed in ffprobe before the circuit closes
+                // the persist queue silently ignores requests refused by an open breaker or an active half-open trial (no failure count,
+                // no negative cache), and playback falls back to the raw .strm URL immediately via the unprobed `resolved` sources
+                probeService.EnqueueBackgroundPersist(item);
+                return resolved;
+            }
+
+            if (!await probeService.PreflightAsync(item, cancellationToken).ConfigureAwait(false))
+            {
+                return resolved;
+            }
+
             // protects the Core i3 from latency spikes: every source shares ONE 5s budget and the 2-process gate, and the
             // client's token is passed through, so playback start can never wait on unbounded or unlimited ffprobe work
-            var infos = await _probeServiceFactory()
+            var infos = await probeService
                 .ProbeSourcesInlineAsync(targets, cancellationToken)
                 .ConfigureAwait(false);
 

@@ -1,0 +1,14 @@
+# Merge into your docker-compose.yml. Paths are relative to the compose file; adjust ./scripts to where you keep these files.
+# Host prerequisite: chmod +x scripts/custom-cont-init.d/bypass-ffprobe.sh scripts/strm-ffprobe-wrapper.sh
+services:
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    volumes:
+      - ./scripts/strm-ffprobe-wrapper.sh:/strm-ffprobe-wrapper.sh:ro
+      - ./scripts/custom-cont-init.d:/custom-cont-init.d:ro
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    volumes:
+      - ./scripts/strm-ffprobe-wrapper.sh:/strm-ffprobe-wrapper.sh:ro
+      - ./scripts/custom-cont-init.d:/custom-cont-init.d:ro

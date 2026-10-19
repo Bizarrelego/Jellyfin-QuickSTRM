@@ -6,6 +6,14 @@
             <h2 class="sectionTitle" style="margin-bottom: 0.3em;">QuickSTRM</h2>
         </div>
 
+        <!-- Circuit breaker warning banner (shown dynamically) -->
+        <div id="circuitBreakerBanner" style="display: none; background: rgba(183, 28, 28, 0.2); border: 1px solid #e53935; border-radius: 8px; padding: 1em 1.2em; margin-bottom: 1.2em; color: #ffcdd2;">
+            <strong>&#9888; Circuit Breaker Tripped.</strong>
+            Too many consecutive probe/connectivity failures; queue processing and auto-deletion are paused.
+            <div id="circuitBreakerStatus" style="margin-top: 0.4em;"></div>
+            <div style="margin-top: 0.4em; font-size: 0.85em; color: #ef9a9a;">Recovery is automatic. Please verify your cloud mounts are online. "Reset Failure Cache" below is an optional manual override.</div>
+        </div>
+
         <!-- Library-wide pre-probe panel card -->
         <div class="verticalSection verticalSection-extrabottompadding">
 
@@ -82,6 +90,17 @@
                         <input is="emby-checkbox" type="checkbox" id="chkEnableAutoProbe" />
                         <span>Auto-probe new .strm items on library add</span>
                     </label>
+                </div>
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="chkEnableAutoDelete" />
+                        <span>Enable Auto-Deletion of Dead STRM Links</span>
+                    </label>
+                    <div class="fieldDescription">Deletes the .strm file and removes it from the library when its link fails. Halted while the circuit breaker is tripped.</div>
+                </div>
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="txtMountMarkerFileName" label="Mount Marker File Name (Optional)" />
+                    <div class="fieldDescription">A file that always exists on your cloud mount (e.g. .mount_ok). Searched up to 5 folders above each .strm; if missing, failures are treated as a dropped mount and nothing is deleted. If empty, an empty parent folder is treated as a dropped mount.</div>
                 </div>
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block emby-button">

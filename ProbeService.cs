@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Http;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +18,8 @@ using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Model.Dlna;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.MediaInfo;
+using MediaBrowser.Model.Activity;
+using ActivityLog = Jellyfin.Database.Implementations.Entities.ActivityLog;
 
 namespace QuickSTRM;
 
@@ -75,6 +80,71 @@ public sealed class ProbeService : IHostedService, IDisposable
     // and the user is left with a spinner while a useless ffprobe keeps burning CPU
     private static readonly TimeSpan InlineProbeTimeout = TimeSpan.FromSeconds(5);
 
+    // Circuit breaker: consecutive probe/HEAD failures beyond this trip the breaker (a cloud mount drop looks like mass failure)
+    private const int CircuitBreakerThreshold = 10;
+    private int _consecutiveFailures;
+    private volatile bool _circuitTripped;
+
+    // serialises circuit STATE TRANSITIONS (trip / close / reset) so check-then-act races can't double-trip, double-notify or
+    // resurrect a manually reset breaker; the hot-path reads (_circuitTripped, ticks, trial CAS) stay lock-free
+    private readonly object _circuitLock = new();
+
+    // cancelled on StopAsync/Dispose: every fire-and-forget probe, HEAD request and ffprobe-owning RefreshMetadata call is tied to it,
+    // so Jellyfin shutdown/plugin unload kills in-flight work (and the ffprobe child processes) immediately
+    private readonly CancellationTokenSource _shutdownCts = new();
+    private int _disposed;
+
+    // auto-recovery: after tripping, the breaker stays open for this long, then goes half-open and lets exactly ONE trial through
+    private static readonly TimeSpan CircuitCooldown = TimeSpan.FromMinutes(5);
+    private long _circuitTrippedAtTicks; // UTC ticks; 0 = not tripped (long so reads/writes are atomic)
+    private int _halfOpenInFlight;       // 0/1: guards the single half-open trial request
+    private readonly IActivityManager _activityManager;
+
+    // pre-flight HEAD must answer within 500ms or the link is treated as dead, so no ffprobe slot is spent on it
+    private static readonly TimeSpan PreflightTimeout = TimeSpan.FromMilliseconds(500);
+    // instance (not static) so it is disposed on plugin unload and doesn't pin the plugin's AssemblyLoadContext; a bounded connection
+    // lifetime still gives DNS refresh without socket churn
+    private readonly HttpClient _preflightClient = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) })
+    {
+        Timeout = TimeSpan.FromSeconds(5)
+    };
+
+    // caps simultaneous pre-flight HEADs (e.g. a 50-item season pack import) to avoid socket exhaustion, remote 429s and queue-induced
+    // false timeouts; entirely separate from _probeGate, which still governs ffprobe processes
+    private const int MaxConcurrentHeads = 10;
+    private readonly SemaphoreSlim _headGate = new(MaxConcurrentHeads, MaxConcurrentHeads);
+
+    /// <summary>Gets a value indicating whether the circuit breaker is tripped (queue processing and auto-delete halted).</summary>
+    public bool IsCircuitTripped => _circuitTripped;
+
+    /// <summary>Gets when the breaker last tripped (UTC), or null while closed.</summary>
+    public DateTime? CircuitTrippedAt
+        => !_circuitTripped || Interlocked.Read(ref _circuitTrippedAtTicks) == 0
+            ? null
+            : new DateTime(Interlocked.Read(ref _circuitTrippedAtTicks), DateTimeKind.Utc);
+
+    /// <summary>Gets the time left before a half-open trial is allowed (zero when closed or already elapsed).</summary>
+    public TimeSpan CircuitCooldownRemaining
+    {
+        get
+        {
+            var at = CircuitTrippedAt;
+            if (at is null)
+            {
+                return TimeSpan.Zero;
+            }
+
+            var left = CircuitCooldown - (DateTime.UtcNow - at.Value);
+            return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        }
+    }
+
+    /// <summary>Gets Closed, Open (cooling down) or HalfOpen (cooldown elapsed, trial allowed/in flight).</summary>
+    public string CircuitState => !_circuitTripped ? "Closed" : CircuitCooldownRemaining > TimeSpan.Zero ? "Open" : "HalfOpen";
+
+    /// <summary>Gets the current number of consecutive probe/HEAD failures.</summary>
+    public int ConsecutiveFailures => Volatile.Read(ref _consecutiveFailures);
+
     /// <summary>Gets the current task state: Idle, Running, or Stopping.</summary>
     public string State { get; private set; } = "Idle";
 
@@ -94,8 +164,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         IDirectoryService directoryService,
         IMediaEncoder mediaEncoder,
         IMemoryCache memoryCache,
+        IActivityManager activityManager,
         ILogger<ProbeService> logger)
     {
+        _activityManager = activityManager;
         _libraryManager = libraryManager;
         _directoryService = directoryService;
         _mediaEncoder = mediaEncoder;
@@ -114,6 +186,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _libraryManager.ItemAdded -= OnItemAdded;
+        _shutdownCts.Cancel();
         StopProbe();
         return Task.CompletedTask;
     }
@@ -134,21 +207,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             return;
         }
 
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                _logger.LogInformation("QuickSTRM: Auto-probing new item {Name}", item.Name);
-
-                // protects low-end CPUs: the shared 2-slot gate is acquired inside ProbeItemAsync, so a bulk import
-                // queues here instead of spawning unbounded ffprobe processes
-                await ProbeItemAsync(item, BackgroundProbeTimeout, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "QuickSTRM: Auto-probe failed for {Name}", item.Name);
-            }
-        });
+        // protects low-end CPUs and memory: routed through the SAME bounded (500), de-duplicated, negative-cached queue as playback
+        // persistence, so a bulk import can no longer spawn one unbounded parked Task per added item; the 2-slot gate still applies
+        _logger.LogInformation("QuickSTRM: Auto-probing new item {Name}", item.Name);
+        EnqueueBackgroundPersist(item);
     }
 
     // ── Public API ──
@@ -207,6 +269,13 @@ public sealed class ProbeService : IHostedService, IDisposable
             return false;
         }
 
+        // an open breaker halts queue processing; once the cooldown has elapsed requests may queue and the half-open trial
+        // (taken in ProbeItemAsync and held until ffprobe succeeds or fails) decides whether to resume
+        if (_circuitTripped && (CircuitCooldownRemaining > TimeSpan.Zero || Volatile.Read(ref _halfOpenInFlight) != 0))
+        {
+            return false;
+        }
+
         // protects memory: bounded queue; when full we drop the request (the item is simply retried on a later play)
         if (_pendingPersist.Count >= MaxPendingPersist)
         {
@@ -227,19 +296,30 @@ public sealed class ProbeService : IHostedService, IDisposable
             {
                 // improves efficiency: persisting once removes the need to re-probe this item in memory on every later play;
                 // it goes through the shared 2-slot gate, so it can never exceed the process limit
-                var ok = await ProbeItemAsync(
+                var attempt = await ProbeItemAsync(
                     item,
                     BackgroundProbeTimeout,
-                    CancellationToken.None,
+                    _shutdownCts.Token,
                     onSlotAcquired: () => Interlocked.Increment(ref _runningPersist),
                     onSlotReleased: () => Interlocked.Decrement(ref _runningPersist)).ConfigureAwait(false);
 
+                // refused by the breaker/trial lock: this item did nothing wrong, so it is silently ignored - not counted, not
+                // negative-cached, and retried on a later play
+                if (attempt == ProbeAttempt.SkippedDueToTrial)
+                {
+                    return;
+                }
+
                 // Jellyfin's refresh can finish "successfully" without stream info when ffprobe fails inside it, so success
                 // is judged by the item actually having a runtime afterwards, not only by the absence of an exception
-                if (!ok || !HasStreamInfo(item))
+                if (attempt != ProbeAttempt.Completed || !HasStreamInfo(item))
                 {
                     MarkPersistFailed(item);
                 }
+            }
+            catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested)
+            {
+                // server shutdown / plugin unload: not a probe failure, nothing to cache
             }
             catch (Exception ex)
             {
@@ -267,7 +347,357 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
 
         _failedItemIds.Clear();
+        ResetCircuitBreaker();
         _logger.LogInformation("QuickSTRM: Flushed negative persistence failure cache");
+    }
+
+    /// <summary>Manual override: closes the breaker immediately and zeroes the failure counter.</summary>
+    public void ResetCircuitBreaker()
+    {
+        lock (_circuitLock)
+        {
+            Interlocked.Exchange(ref _consecutiveFailures, 0);
+            Interlocked.Exchange(ref _circuitTrippedAtTicks, 0);
+            Interlocked.Exchange(ref _halfOpenInFlight, 0);
+            if (_circuitTripped)
+            {
+                _circuitTripped = false;
+                _logger.LogInformation("QuickSTRM: Circuit breaker manually reset to closed");
+            }
+        }
+    }
+
+    /// <summary>Classifies a failure; only <see cref="PermanentFailure"/> may ever lead to deletion.</summary>
+    private enum FailureKind
+    {
+        /// <summary>Timeouts, 429, 502, garbage/empty ffprobe output: counted and negative-cached, never deleted.</summary>
+        TemporaryFailure,
+
+        /// <summary>Deterministic Not Found, strictly: an HTTP 404 on the HEAD check, or the .strm file itself missing from the library.</summary>
+        PermanentFailure
+    }
+
+    private void RecordSuccess() => Interlocked.Exchange(ref _consecutiveFailures, 0);
+
+    /// <summary>Records a failure; returns true if the breaker is (now) tripped.</summary>
+    private bool RecordFailure()
+    {
+        var n = Interlocked.Increment(ref _consecutiveFailures);
+        if (n > CircuitBreakerThreshold && !_circuitTripped)
+        {
+            lock (_circuitLock)
+            {
+                // re-check under the lock: concurrent failures trip (and notify) exactly once
+                if (!_circuitTripped)
+                {
+                    Interlocked.Exchange(ref _circuitTrippedAtTicks, DateTime.UtcNow.Ticks); // before the flag: readers never see tripped+0
+                    _circuitTripped = true;
+                    _logger.LogCritical(
+                        "QuickSTRM: Circuit breaker TRIPPED after {Count} consecutive failures. Queue processing and auto-deletion halted; retrying automatically in {Minutes} minutes (or reset manually)",
+                        n,
+                        CircuitCooldown.TotalMinutes);
+                    Notify(
+                        "QuickSTRM Circuit Breaker Tripped",
+                        $"Cloud mount down. Retrying in {CircuitCooldown.TotalMinutes:0} minutes.",
+                        Microsoft.Extensions.Logging.LogLevel.Critical);
+                }
+            }
+        }
+
+        return _circuitTripped;
+    }
+
+    /// <summary>
+    /// Decides whether a request may proceed. Closed: yes. Open (cooldown running): no. Half-open (cooldown elapsed): exactly one
+    /// caller wins the trial slot; everyone else is refused until the trial resolves.
+    /// </summary>
+    private bool TryEnterCircuit(out bool isTrial)
+    {
+        isTrial = false;
+        if (!_circuitTripped)
+        {
+            return true;
+        }
+
+        if (CircuitCooldownRemaining > TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        if (Interlocked.CompareExchange(ref _halfOpenInFlight, 1, 0) != 0)
+        {
+            return false;
+        }
+
+        // a thread that read "tripped + cooldown elapsed" may have lost a race with a trial that already CLOSED the circuit (releasing the
+        // lock). Re-check after winning the CAS so it never becomes a bogus second trial.
+        if (!_circuitTripped)
+        {
+            Interlocked.Exchange(ref _halfOpenInFlight, 0);
+            return true;
+        }
+
+        isTrial = true;
+        _logger.LogInformation("QuickSTRM: Circuit breaker half-open; allowing one trial request");
+        return true;
+    }
+
+    // resolves the half-open trial: success closes the circuit; failure re-trips it and restarts the 5-minute cooldown
+    private void ResolveTrial(bool success)
+    {
+        lock (_circuitLock)
+        {
+            // a manual reset during the trial already closed the circuit: the stale outcome must not re-trip it or re-notify
+            if (_circuitTripped)
+            {
+                if (success)
+                {
+                    Interlocked.Exchange(ref _consecutiveFailures, 0);
+                    Interlocked.Exchange(ref _circuitTrippedAtTicks, 0);
+                    _circuitTripped = false;
+                    _logger.LogInformation("QuickSTRM: Half-open trial succeeded; circuit breaker closed, queue processing resumed");
+                    Notify(
+                        "QuickSTRM Circuit Breaker Reset",
+                        "Cloud mount restored.",
+                        Microsoft.Extensions.Logging.LogLevel.Information);
+                }
+                else
+                {
+                    Interlocked.Exchange(ref _circuitTrippedAtTicks, DateTime.UtcNow.Ticks);
+                    _logger.LogCritical(
+                        "QuickSTRM: Half-open trial failed; circuit breaker re-tripped, next retry in {Minutes} minutes",
+                        CircuitCooldown.TotalMinutes);
+                }
+            }
+
+            // released last: until the state above is final, other threads still see the trial as in flight
+            Interlocked.Exchange(ref _halfOpenInFlight, 0);
+        }
+    }
+
+    // fire-and-forget admin notification in Jellyfin's activity log; never allowed to throw into the probe path
+    private void Notify(string name, string overview, Microsoft.Extensions.Logging.LogLevel severity)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _activityManager.CreateAsync(new ActivityLog(name, "QuickSTRM", Guid.Empty)
+                {
+                    Overview = overview,
+                    ShortOverview = overview,
+                    Severity = severity
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "QuickSTRM: Could not publish activity notification '{Name}'", name);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Pre-flight connectivity check: a 500ms HEAD on the .strm URL before any ffprobe slot is used. Returns false when the host
+    /// answers 404/502/429, errors, or times out; in that case the item is negative-cached and counted by the circuit breaker.
+    /// Only a 404 or a verifiably deleted .strm file may lead to deletion (if enabled and the breaker is closed).
+    /// HEAD requests never touch the 2-slot ffprobe gate, and are themselves capped by the 10-slot _headGate.
+    /// While the breaker is open this refuses immediately. It never takes the half-open trial and never changes the circuit
+    /// state: the trial is owned by ProbeItemAsync, which holds it until ffprobe has really succeeded or failed.
+    /// </summary>
+    public async Task<bool> PreflightAsync(BaseItem item, CancellationToken ct)
+    {
+        if (_circuitTripped)
+        {
+            return false;
+        }
+
+        return await PreflightCoreAsync(item, ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> PreflightCoreAsync(BaseItem item, CancellationToken ct)
+    {
+        string? url;
+        try
+        {
+            url = null;
+            foreach (var line in await File.ReadAllLinesAsync(item.Path, ct).ConfigureAwait(false))
+            {
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    url = line.Trim();
+                    break;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // FileNotFoundException/DirectoryNotFoundException both derive from IOException; classify them explicitly first
+            var kind = FailureKind.TemporaryFailure;
+            if (ex is FileNotFoundException && IsParentDirectoryReadable(item.Path))
+            {
+                // the parent directory is confirmed present and readable, so only the .strm itself is gone
+                kind = FailureKind.PermanentFailure;
+            }
+            else if (ex is not (FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException))
+            {
+                _logger.LogWarning(ex, "QuickSTRM: Cannot read .strm file {Path}", item.Path);
+                return true; // not a storage problem; let the normal path decide
+            }
+
+            // DirectoryNotFound, generic IOException (device not ready, broken network mount) or an unverifiable parent: temporary
+            _logger.LogWarning(
+                ex,
+                "QuickSTRM: .strm file unavailable for {Name}: {Path} ({Kind})",
+                item.Name,
+                item.Path,
+                kind);
+            MarkPersistFailed(item);
+            HandleFailure(item, kind);
+            return false;
+        }
+
+        if (url is not null && Path.IsPathRooted(url) && !url.Contains("://", StringComparison.Ordinal))
+        {
+            if (File.Exists(url))
+            {
+                return true;
+            }
+
+            // a missing local target usually means a dropped/restarting cloud mount (e.g. rclone), so it is NEVER permanent:
+            // it still increments the breaker and enters the 1-hour negative cache, but cannot trigger deletion
+            _logger.LogWarning("QuickSTRM: Local .strm target missing for {Name}: {Url} (treated as temporary; possible dropped mount)", item.Name, url);
+            MarkPersistFailed(item);
+            HandleFailure(item, FailureKind.TemporaryFailure);
+            return false;
+        }
+
+        if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            return true; // other protocols are not HEAD-checkable
+        }
+
+        var dead = false;
+        var kind = FailureKind.TemporaryFailure;
+
+        // waiting for a HEAD slot uses the caller's token only: the 500ms clock starts once we hold a slot, so queue time can't
+        // masquerade as a dead host and trip the breaker
+        await _headGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(PreflightTimeout);
+            using var request = new HttpRequestMessage(HttpMethod.Head, uri);
+            using var response = await _preflightClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+            // 404 is the only deterministic signal; 502/429 are upstream glitches and stay temporary
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                dead = true;
+                kind = FailureKind.PermanentFailure;
+            }
+            else if (response.StatusCode is HttpStatusCode.BadGateway or HttpStatusCode.TooManyRequests)
+            {
+                dead = true;
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            dead = true; // 500ms timeout
+        }
+        catch (HttpRequestException)
+        {
+            dead = true;
+        }
+        finally
+        {
+            ReleaseQuietly(_headGate);
+        }
+
+        if (!dead)
+        {
+            RecordSuccess();
+            return true;
+        }
+
+        _logger.LogWarning("QuickSTRM: Pre-flight HEAD failed for {Name}; falling back without ffprobe", item.Name);
+        MarkPersistFailed(item);
+        HandleFailure(item, kind);
+        return false;
+    }
+
+    // maximum number of directories examined (parent first, then ancestors) when searching for the mount marker file
+    private const int MaxMarkerSearchDepth = 5;
+
+    // true only if the .strm's parent directory exists, can be read, AND the mount looks alive: with a marker configured the marker
+    // must be found within MaxMarkerSearchDepth levels; without one the directory must not be empty. Any I/O error or failed check means
+    // we cannot prove the file was deliberately removed, so the caller must treat the failure as temporary
+    private static bool IsParentDirectoryReadable(string? path)
+    {
+        try
+        {
+            var parent = string.IsNullOrEmpty(path) ? null : Path.GetDirectoryName(path);
+            if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+            {
+                return false;
+            }
+
+            var marker = Plugin.Instance?.Configuration?.MountMarkerFileName?.Trim();
+            if (!string.IsNullOrEmpty(marker))
+            {
+                // Path A: walk up (bounded) looking for the marker; a dropped mount leaves an empty mount point without it
+                var dir = parent;
+                for (var depth = 0; depth < MaxMarkerSearchDepth && !string.IsNullOrEmpty(dir); depth++)
+                {
+                    if (File.Exists(Path.Combine(dir, marker)))
+                    {
+                        return true;
+                    }
+
+                    dir = Path.GetDirectoryName(dir);
+                }
+
+                return false;
+            }
+
+            // Path B: no marker configured; a completely empty directory is assumed to be a dropped mount
+            return Directory.EnumerateFileSystemEntries(parent).Any();
+        }
+        catch (Exception)
+        {
+            // any I/O fault (IOException, access violation, path/encoding problems on a dead mount) = cannot prove deletion => temporary
+            return false;
+        }
+    }
+
+    // every failure increments the breaker (the caller has already negative-cached the item); the file system is touched
+    // ONLY for a PermanentFailure while the circuit is closed and auto-delete is enabled
+    private void HandleFailure(BaseItem item, FailureKind kind)
+    {
+        if (RecordFailure())
+        {
+            return;
+        }
+
+        if (kind != FailureKind.PermanentFailure || Plugin.Instance?.Configuration is not { EnableAutoDelete: true })
+        {
+            return;
+        }
+
+        try
+        {
+            if (item.Path is not null && File.Exists(item.Path))
+            {
+                File.Delete(item.Path);
+            }
+
+            // remove from the Jellyfin library without touching disk again (file already deleted above)
+            _libraryManager.DeleteItem(item, new DeleteOptions { DeleteFileLocation = false });
+            _logger.LogWarning("QuickSTRM: Auto-deleted dead .strm link {Name} ({Path})", item.Name, item.Path);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "QuickSTRM: Auto-delete failed for {Name}", item.Name);
+        }
     }
 
     private void MarkPersistFailed(BaseItem item)
@@ -339,7 +769,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
         finally
         {
-            _probeGate.Release();
+            ReleaseQuietly(_probeGate);
         }
     }
 
@@ -402,6 +832,12 @@ public sealed class ProbeService : IHostedService, IDisposable
                     break;
                 }
 
+                if (_circuitTripped)
+                {
+                    _logger.LogCritical("QuickSTRM: Circuit breaker tripped; halting bulk probe");
+                    break;
+                }
+
                 CurrentItemName = item.Name ?? item.Path ?? string.Empty;
                 _logger.LogInformation("QuickSTRM: Probing [{Index}/{Total}] {Name}",
                     ProcessedItems + 1, TotalItems, CurrentItemName);
@@ -434,19 +870,91 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
     }
 
+    private sealed class TrialState
+    {
+        /// <summary>null = undecided (cancelled/refused): the trial lock is released without touching breaker state.</summary>
+        public bool? Success;
+    }
+
+    /// <summary>Result of a probe attempt, distinguishing "nothing was attempted" from a real failure.</summary>
+    private enum ProbeAttempt
+    {
+        /// <summary>The refresh ran (stream info must still be verified by the caller).</summary>
+        Completed,
+
+        /// <summary>The attempt failed (pre-flight failure, timeout, no slot): already counted/cached where appropriate.</summary>
+        Failed,
+
+        /// <summary>Refused because the breaker is open or another request holds the half-open trial: never counted, cached or deleted.</summary>
+        SkippedDueToTrial
+    }
+
     /// <summary>
     /// Triggers the official Jellyfin metadata refresh with remote content probing
     /// for a single item. This writes real probe data into the database.
+    /// Circuit-aware entry point: the half-open trial lock, if taken here, is held for the ENTIRE pipeline (HEAD pre-flight,
+    /// _probeGate wait, ffprobe) and released in a finally block, so an unhandled exception can never deadlock the breaker.
+    /// The circuit closes only when ffprobe actually produced stream info. Requests refused by an open breaker or an active
+    /// trial return <see cref="ProbeAttempt.SkippedDueToTrial"/> and bypass the whole failure pipeline.
     /// </summary>
-    private async Task<bool> ProbeItemAsync(
+    private async Task<ProbeAttempt> ProbeItemAsync(
         BaseItem item,
         TimeSpan timeout,
         CancellationToken ct,
         Action? onSlotAcquired = null,
         Action? onSlotReleased = null)
     {
+        if (!TryEnterCircuit(out var isTrial))
+        {
+            return ProbeAttempt.SkippedDueToTrial;
+        }
+
+        var trial = new TrialState();
+        try
+        {
+            var completed = await ProbeItemCoreAsync(item, timeout, ct, onSlotAcquired, onSlotReleased, trial).ConfigureAwait(false);
+            return completed ? ProbeAttempt.Completed : ProbeAttempt.Failed;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // unhandled probe-stage error during a trial = failed trial (the lock is still released below)
+            trial.Success ??= false;
+            throw;
+        }
+        finally
+        {
+            if (isTrial)
+            {
+                if (trial.Success.HasValue)
+                {
+                    ResolveTrial(trial.Success.Value);
+                }
+                else
+                {
+                    Interlocked.Exchange(ref _halfOpenInFlight, 0);
+                }
+            }
+        }
+    }
+
+    private async Task<bool> ProbeItemCoreAsync(
+        BaseItem item,
+        TimeSpan timeout,
+        CancellationToken ct,
+        Action? onSlotAcquired,
+        Action? onSlotReleased,
+        TrialState trial)
+    {
         // protects low-end CPUs: only background work uses the heavy RefreshMetadata path; playback never waits on it
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        // cheap HEAD check BEFORE waiting for / holding a gate slot, so dead links never occupy one of the 2 ffprobe slots;
+        // it passes the trial forward without changing the circuit state - only a full ffprobe success may close it
+        if (!await PreflightCoreAsync(item, ct).ConfigureAwait(false))
+        {
+            trial.Success = false;
+            return false;
+        }
 
         try
         {
@@ -457,11 +965,13 @@ public sealed class ProbeService : IHostedService, IDisposable
             return false;
         }
 
-        // lets the persistence queue distinguish items waiting for a slot from items actually probing
-        onSlotAcquired?.Invoke();
+        var probeOk = false;
 
         try
         {
+            // lets the persistence queue distinguish items waiting for a slot from items actually probing (inside the try so the
+            // matching release below always runs, even if this callback were ever to throw)
+            onSlotAcquired?.Invoke();
             // protects bulk imports: the 60s clock starts only once we hold a slot, so queue time can't cause false timeouts
             timeoutCts.CancelAfter(timeout);
 
@@ -474,6 +984,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     MetadataRefreshMode = MetadataRefreshMode.FullRefresh
                 },
                 timeoutCts.Token).ConfigureAwait(false);
+            probeOk = HasStreamInfo(item);
             return true;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -486,7 +997,29 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             // protects low-end CPUs: always release the slot (even on error/cancel) so the 2-slot limit can't leak shut
             onSlotReleased?.Invoke();
-            _probeGate.Release();
+            ReleaseQuietly(_probeGate);
+
+            // slot is already free here, so failure handling (file/library deletion) never holds an ffprobe slot; it is fully guarded so
+            // a fault here can never mask the real result or escape the pipeline
+            try
+            {
+                if (probeOk)
+                {
+                    RecordSuccess();
+                    trial.Success = true; // populated stream info = full end-to-end success
+                }
+                else if (!ct.IsCancellationRequested)
+                {
+                    // timeouts, exceptions and empty/invalid ffprobe results are always temporary: never deletes anything
+                    trial.Success = false;
+                    MarkPersistFailed(item);
+                    HandleFailure(item, FailureKind.TemporaryFailure);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "QuickSTRM: Post-probe bookkeeping failed for {Name}", item.Name);
+            }
         }
     }
 
@@ -509,9 +1042,52 @@ public sealed class ProbeService : IHostedService, IDisposable
     private static bool HasStreamInfo(BaseItem item)
         => item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0;
 
+    // a slot holder finishing after Dispose must not throw ObjectDisposedException out of a finally block
+    private static void ReleaseQuietly(SemaphoreSlim gate)
+    {
+        try
+        {
+            gate.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _libraryManager.ItemAdded -= OnItemAdded;
+
+        // 1) cancel first so in-flight HEADs, queued probes and ffprobe-owning refreshes stop before their gates disappear
+        try
+        {
+            _shutdownCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
         _cts?.Dispose();
+
+        // 2) flush ONLY our own negative-cache keys. IMemoryCache is Jellyfin's shared singleton: disposing it here would break the
+        //    whole server, so it is deliberately never disposed by the plugin.
+        foreach (var id in _failedItemIds.Keys)
+        {
+            _failedPersistCache.Remove(FailureKey(id));
+        }
+
+        _failedItemIds.Clear();
+        _pendingPersist.Clear();
+
+        // 3) dispose what we own
+        _preflightClient.Dispose();
         _probeGate.Dispose();
+        _headGate.Dispose();
+        _shutdownCts.Dispose();
     }
 }

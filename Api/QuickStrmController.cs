@@ -84,6 +84,10 @@ public class QuickStrmController : ControllerBase
             Running = running,
             // waiting + running
             Total = _probeService.PersistQueueTotal,
+            CircuitTripped = _probeService.IsCircuitTripped,
+            CircuitState = _probeService.CircuitState,
+            CooldownSecondsRemaining = (int)System.Math.Ceiling(_probeService.CircuitCooldownRemaining.TotalSeconds),
+            ConsecutiveFailures = _probeService.ConsecutiveFailures,
             Status = running + waiting == 0 ? "Idle" : running > 0 ? "Running" : "Waiting"
         });
     }
