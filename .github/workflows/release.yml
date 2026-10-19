@@ -1,0 +1,87 @@
+name: Build and Release
+
+# Triggers specifically on v1.* tags to establish a clean semantic versioning baseline for the standalone QuickSTRM fork
+on:
+  push:
+    tags:
+      - 'v1.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Configures the build agent with the .NET 9.0 SDK targeting Jellyfin 10.11+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # Executes the sequential clean, restore, release build, and publish workflow
+      - name: Clean, Restore, Build, and Publish Release
+        run: |
+          dotnet clean QuickSTRM.csproj -c Release
+          dotnet restore QuickSTRM.csproj
+          dotnet build QuickSTRM.csproj -c Release --no-restore
+          dotnet publish QuickSTRM.csproj -c Release --no-build -o ./publish/QuickSTRM
+
+      # Packages artifacts with strict validation against bundled runtime libraries
+      - name: Verify and Package Release Artifacts
+        run: |
+          # Strict verification: Ensure no Jellyfin server runtime binaries leaked into the publish folder.
+          # Packaging strictly limits output to the plugin assembly and manifest, preventing bloat
+          # and unnecessary memory footprint on resource-constrained hardware deployments (such as Intel Core i3).
+          if ls ./publish/QuickSTRM/Jellyfin.*.dll 1> /dev/null 2>&1 || ls ./publish/QuickSTRM/MediaBrowser.*.dll 1> /dev/null 2>&1; then
+            echo "ERROR: Jellyfin runtime assemblies detected in publish output. ExcludeAssets=runtime is violated!"
+            exit 1
+          fi
+
+          # Include manifests alongside the compiled plugin library
+          cp meta.json ./publish/QuickSTRM/
+          cp build.yaml ./publish/QuickSTRM/
+
+          # Compress the validated artifact directory into QuickSTRM.zip
+          zip -j QuickSTRM.zip ./publish/QuickSTRM/*
+
+          # Expose standalone DLL for direct file placement
+          cp ./publish/QuickSTRM/QuickSTRM.dll ./QuickSTRM.dll
+
+      - name: Extract Release Notes
+        id: notes
+        run: |
+          # Extract release notes for current tag from CHANGELOG.md
+          VERSION="${{ github.ref_name }}"
+          CLEAN_VER="${VERSION#v}"
+          
+          if grep -q "## \[$CLEAN_VER\]" CHANGELOG.md; then
+            awk -v ver="## [$CLEAN_VER]" '
+              $0 ~ ver { flag=1; next }
+              flag && /^## \[/ { flag=0 }
+              flag { print }
+            ' CHANGELOG.md > RELEASE_NOTES.md
+          else
+            cp CHANGELOG.md RELEASE_NOTES.md
+          fi
+
+      # Automatically drafts a GitHub Release attaching QuickSTRM.zip and QuickSTRM.dll
+      - name: Draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Jellyfin-QuickSTRM ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: true
+          prerelease: false
+          files: |
+            QuickSTRM.dll
+            QuickSTRM.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

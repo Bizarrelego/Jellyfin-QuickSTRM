@@ -1,0 +1,95 @@
+<div id="QuickStrmConfigurationPage" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/QuickSTRM.js">
+    <div class="content-primary" style="max-width: 800px;">
+        
+        <!-- Page title -->
+        <div class="verticalSection">
+            <h2 class="sectionTitle" style="margin-bottom: 0.3em;">QuickSTRM</h2>
+        </div>
+
+        <!-- Library-wide pre-probe panel card -->
+        <div class="verticalSection verticalSection-extrabottompadding">
+
+            <!-- Panel card -->
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 1.4em;">
+                
+                <!-- Three summary metrics -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid rgba(255, 255, 255, 0.06); text-align: center;">
+                    <div>
+                        <div style="font-size: 0.8em; color: #888; margin-bottom: 0.2em;">.strm media count</div>
+                        <div id="lblSummaryTotal" style="font-size: 1.6em; font-weight: 600; color: #fff;">-</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8em; color: #81c784; margin-bottom: 0.2em;">Has stream info</div>
+                        <div id="lblSummaryProbed" style="font-size: 1.6em; font-weight: 600; color: #4caf50;">-</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8em; color: #ffb74d; margin-bottom: 0.2em;">Missing stream info</div>
+                        <div id="lblSummaryUnprobed" style="font-size: 1.6em; font-weight: 600; color: #ff9800;">-</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8em; color: #64b5f6; margin-bottom: 0.2em;">Background Queue</div>
+                        <div id="lblSummaryQueue" style="font-size: 1.6em; font-weight: 600; color: #2196f3;">-</div>
+                        <div id="lblSummaryQueueDetail" style="font-size: 0.7em; color: #777; margin-top: 0.2em;">0 waiting / 0 running</div>
+                        <div style="margin-top: 0.4em;">
+                            <button is="emby-button" type="button" id="btnResetFailureCache" class="raised" title="Flush negative cache of failed background probes" style="font-size: 0.75em; padding: 0.2em 0.8em; min-width: auto; height: 26px; background: rgba(255, 255, 255, 0.08); color: #ccc;">
+                                <span>Reset Failure Cache</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mode selector and buttons -->
+                <div class="flex align-items-center" style="gap: 0.8em; margin-top: 1.2em; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 180px;">
+                        <select is="emby-select" id="selectProbeMode" class="emby-select" style="margin: 0; width: 100%; height: 38px; box-sizing: border-box;">
+                            <option value="Incremental">Incremental probe</option>
+                            <option value="Full">Full probe</option>
+                        </select>
+                    </div>
+                    <div>
+                        <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit" style="margin: 0; min-width: 120px; height: 38px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;">
+                            <span>Start pre-probe</span>
+                        </button>
+                        <button is="emby-button" type="button" id="btnStopProbe" class="raised" style="margin: 0; min-width: 120px; height: 38px; box-sizing: border-box; display: none; background: #b71c1c; color: white; align-items: center; justify-content: center;">
+                            <span>Stop</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Live progress area -->
+                <div id="probeProgressSection" style="margin-top: 1.4em;">
+                    <div style="font-size: 0.85em; margin-bottom: 0.5em;">
+                        <span id="lblTaskStatus" style="color: #999;">Status: Idle</span>
+                    </div>
+
+                    <div style="width: 100%; height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 3px; overflow: hidden;">
+                        <div id="probeProgressBar" style="width: 0%; height: 100%; background: #00a4dc; transition: width 0.25s ease;"></div>
+                    </div>
+
+                    <div id="probeCurrentItemRow" style="font-size: 0.8em; color: #777; margin-top: 0.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        Probing: <span id="lblCurrentItem" style="color: #bbb;">-</span>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Configuration form -->
+        <form class="quickStrmConfigurationForm">
+            <div class="verticalSection verticalSection-extrabottompadding">
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="chkEnableAutoProbe" />
+                        <span>Auto-probe new .strm items on library add</span>
+                    </label>
+                </div>
+                <div>
+                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                        <span>Save</span>
+                    </button>
+                </div>
+            </div>
+        </form>
+
+    </div>
+</div>

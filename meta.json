@@ -1,0 +1,11 @@
+{
+  "guid": "1278dbd6-8399-46c0-8e64-31f2d9e022ae",
+  "name": "QuickSTRM",
+  "description": "Eliminates ffprobe latency when playing .strm files for near-instant playback start",
+  "overview": "Instant-start plugin for STRM",
+  "version": "1.0.0.0",
+  "targetAbi": "10.11.0.0",
+  "owner": "Bizarrelego",
+  "category": "General",
+  "status": "Active"
+}

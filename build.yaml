@@ -1,0 +1,13 @@
+---
+name: "QuickSTRM"
+guid: "1278dbd6-8399-46c0-8e64-31f2d9e022ae"
+# Version reset to 1.0.0.0 establishes a clean semantic versioning baseline for the standalone QuickSTRM fork
+version: "1.0.0.0"
+targetAbi: "10.11.0.0"
+framework: "net9.0"
+overview: "Eliminates ffprobe latency when playing .strm files for near-instant playback start"
+description: "Uses the decorator pattern to intercept GetPlaybackMediaSources and skip remote ffprobe network probing for .strm files that already have stream info. Also provides library-wide pre-probing and automatic probing of newly added items."
+category: "General"
+owner: "Bizarrelego"
+artifacts:
+  - "QuickSTRM.dll"
