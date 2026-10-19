@@ -1,10 +1,9 @@
-name: Build and Release
+name: QuickSTRM Release Pipeline
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,65 +13,58 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup .NET SDK
+      - name: Setup .NET 9.0
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
 
-      - name: Compile and Publish
-        run: |
-          dotnet publish -c Release -o ./publish
-          # Include manifests inside publish bundle if present
-          cp meta.json ./publish/ 2>/dev/null || true
-          cp build.yaml ./publish/ 2>/dev/null || true
+      - name: Publish QuickSTRM
+        run: dotnet publish -c Release -o ./publish
 
-      - name: Package Release
+      - name: Package Plugin
         run: |
-          # Zip contents of ./publish directly into QuickSTRM.zip (not the directory itself)
           cd ./publish
           zip -r ../QuickSTRM.zip .
           cd ..
 
-      - name: Calculate Checksum and Update Manifest
+      - name: Update Manifest Checksum and Timestamp
         run: |
-          # Calculate MD5 checksum formatted as uppercase string
-          MD5_CHECKSUM=$(md5sum QuickSTRM.zip | awk '{print toupper($1)}')
-          CURRENT_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          # Calculate MD5 and convert to uppercase
+          CHECKSUM=$(md5sum QuickSTRM.zip | awk '{ print $1 }' | tr 'a-z' 'A-Z')
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          # Safely update the checksum and timestamp of the latest version (index 0)
+          # Handles both standard Jellyfin array-based manifests and single-object manifests
+          jq --arg checksum "$CHECKSUM" --arg timestamp "$TIMESTAMP" \
+            'if type=="array" then 
+               .[0].versions[0].checksum = $checksum | .[0].versions[0].timestamp = $timestamp 
+             else 
+               .versions[0].checksum = $checksum | .versions[0].timestamp = $timestamp 
+             end' manifest.json > manifest.tmp.json && mv manifest.tmp.json manifest.json
 
-          echo "Calculated MD5 Checksum: $MD5_CHECKSUM"
-          echo "Current UTC Timestamp: $CURRENT_TIMESTAMP"
-
-          # Use jq to update checksum and timestamp of the most recent version entry in manifest.json
-          jq --arg checksum "$MD5_CHECKSUM" --arg timestamp "$CURRENT_TIMESTAMP" '
-            .[0].versions[0].checksum = $checksum |
-            .[0].versions[0].timestamp = $timestamp
-          ' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
-
-      - name: Commit and Push Updated Manifest
+      - name: Commit and Push Manifest
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add manifest.json
-          if ! git diff --staged --quiet; then
-            git commit -m "Automated build: update manifest.json checksum and timestamp [skip ci]"
-            git push origin HEAD:main
+          
+          if ! git diff-index --quiet HEAD; then
+            git commit -m "chore: update manifest.json checksum [skip ci]"
+            # Explicitly push to the branch ref to bypass ambiguous tag/branch naming
+            git push origin HEAD:refs/heads/main
           fi
-          # Force update main tag to point to latest commit
-          git tag -f main
-          git push origin refs/tags/main --force
 
-      - name: Deploy GitHub Release
+      - name: Deploy Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: main
-          name: "QuickSTRM (main)"
-          files: QuickSTRM.zip
+          target_commitish: main
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          make_latest: true
+          files: QuickSTRM.zip
