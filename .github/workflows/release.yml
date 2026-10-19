@@ -71,14 +71,14 @@ jobs:
             cp CHANGELOG.md RELEASE_NOTES.md
           fi
 
-      # Automatically drafts a GitHub Release attaching QuickSTRM.zip and QuickSTRM.dll
-      - name: Draft GitHub Release
+      # Automatically publishes a GitHub Release attaching QuickSTRM.zip and QuickSTRM.dll
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Jellyfin-QuickSTRM ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
-          draft: true
+          draft: false
           prerelease: false
           files: |
             QuickSTRM.dll
