@@ -26,7 +26,13 @@ public class QuickStrmController : ControllerBase
     public ActionResult GetSummary()
     {
         var (total, probed, unprobed) = _probeService.GetSummary();
-        return Ok(new { Total = total, Probed = probed, Unprobed = unprobed });
+        return Ok(new
+        {
+            Total = total,
+            Probed = probed,
+            Unprobed = unprobed,
+            CacheSize = _probeService.FailureCacheCount
+        });
     }
 
     /// <summary>
@@ -88,6 +94,7 @@ public class QuickStrmController : ControllerBase
             CircuitState = _probeService.CircuitState,
             CooldownSecondsRemaining = (int)System.Math.Ceiling(_probeService.CircuitCooldownRemaining.TotalSeconds),
             ConsecutiveFailures = _probeService.ConsecutiveFailures,
+            CacheSize = _probeService.FailureCacheCount,
             Status = running + waiting == 0 ? "Idle" : running > 0 ? "Running" : "Waiting"
         });
     }

@@ -1,107 +1,207 @@
 <div id="QuickStrmConfigurationPage" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/QuickSTRM.js">
-    <div class="content-primary" style="max-width: 800px;">
-        
-        <!-- Page title -->
-        <div class="verticalSection">
-            <h2 class="sectionTitle" style="margin-bottom: 0.3em;">QuickSTRM</h2>
-        </div>
+    <div class="content-primary" style="max-width: 900px; margin: 0 auto; padding: 1.5em 1em;">
+        <style>
+            .quickstrm-metrics-grid {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 1em;
+                margin-bottom: 1.5em;
+            }
 
-        <!-- Circuit breaker warning banner (shown dynamically) -->
-        <div id="circuitBreakerBanner" style="display: none; background: rgba(183, 28, 28, 0.2); border: 1px solid #e53935; border-radius: 8px; padding: 1em 1.2em; margin-bottom: 1.2em; color: #ffcdd2;">
-            <strong>&#9888; Circuit Breaker Tripped.</strong>
-            Too many consecutive probe/connectivity failures; queue processing and auto-deletion are paused.
-            <div id="circuitBreakerStatus" style="margin-top: 0.4em;"></div>
-            <div style="margin-top: 0.4em; font-size: 0.85em; color: #ef9a9a;">Recovery is automatic. Please verify your cloud mounts are online. "Reset Failure Cache" below is an optional manual override.</div>
-        </div>
+            .quickstrm-metric-card {
+                background: var(--card-background, rgba(255, 255, 255, 0.04));
+                border: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));
+                border-radius: var(--border-radius-card, 8px);
+                padding: 1.2em 1em;
+                text-align: center;
+                box-sizing: border-box;
+                position: relative;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+            }
 
-        <!-- Library-wide pre-probe panel card -->
-        <div class="verticalSection verticalSection-extrabottompadding">
+            .quickstrm-metric-card:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.25);
+            }
 
-            <!-- Panel card -->
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 1.4em;">
-                
-                <!-- Three summary metrics -->
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid rgba(255, 255, 255, 0.06); text-align: center;">
-                    <div>
-                        <div style="font-size: 0.8em; color: #888; margin-bottom: 0.2em;">.strm media count</div>
-                        <div id="lblSummaryTotal" style="font-size: 1.6em; font-weight: 600; color: #fff;">-</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 0.8em; color: #81c784; margin-bottom: 0.2em;">Has stream info</div>
-                        <div id="lblSummaryProbed" style="font-size: 1.6em; font-weight: 600; color: #4caf50;">-</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 0.8em; color: #ffb74d; margin-bottom: 0.2em;">Missing stream info</div>
-                        <div id="lblSummaryUnprobed" style="font-size: 1.6em; font-weight: 600; color: #ff9800;">-</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 0.8em; color: #64b5f6; margin-bottom: 0.2em;">Background Queue</div>
-                        <div id="lblSummaryQueue" style="font-size: 1.6em; font-weight: 600; color: #2196f3;">-</div>
-                        <div id="lblSummaryQueueDetail" style="font-size: 0.7em; color: #777; margin-top: 0.2em;">0 waiting / 0 running</div>
-                        <div style="margin-top: 0.4em;">
-                            <button is="emby-button" type="button" id="btnResetFailureCache" class="raised" title="Flush negative cache of failed background probes" style="font-size: 0.75em; padding: 0.2em 0.8em; min-width: auto; height: 26px; background: rgba(255, 255, 255, 0.08); color: #ccc;">
-                                <span>Reset Failure Cache</span>
-                            </button>
-                        </div>
+            .quickstrm-metric-title {
+                font-size: 0.8em;
+                font-weight: 500;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: var(--text-muted-color, #999);
+                margin-bottom: 0.4em;
+            }
+
+            .quickstrm-metric-value {
+                font-size: 1.8em;
+                font-weight: 700;
+                line-height: 1.2;
+                color: var(--theme-primary-color, #00a4dc);
+            }
+
+            .quickstrm-metric-sub {
+                font-size: 0.75em;
+                color: var(--text-muted-color, #888);
+                margin-top: 0.35em;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            @media (max-width: 720px) {
+                .quickstrm-metrics-grid {
+                    grid-template-columns: 1fr;
+                }
+            }
+        </style>
+
+        <!-- Page Header -->
+        <div class="verticalSection" style="margin-bottom: 1.5em;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em;">
+                <div>
+                    <h2 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
+                        <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">bolt</span>
+                        QuickSTRM Dashboard
+                    </h2>
+                    <div style="font-size: 0.9em; color: var(--text-muted-color, #888); margin-top: 0.2em;">
+                        STRM Playback Acceleration &amp; Metadata Probing
                     </div>
                 </div>
-
-                <!-- Mode selector and buttons -->
-                <div class="flex align-items-center" style="gap: 0.8em; margin-top: 1.2em; flex-wrap: wrap;">
-                    <div style="flex: 1; min-width: 180px;">
-                        <select is="emby-select" id="selectProbeMode" class="emby-select" style="margin: 0; width: 100%; height: 38px; box-sizing: border-box;">
-                            <option value="Incremental">Incremental probe</option>
-                            <option value="Full">Full probe</option>
-                        </select>
-                    </div>
-                    <div>
-                        <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit" style="margin: 0; min-width: 120px; height: 38px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;">
-                            <span>Start pre-probe</span>
-                        </button>
-                        <button is="emby-button" type="button" id="btnStopProbe" class="raised" style="margin: 0; min-width: 120px; height: 38px; box-sizing: border-box; display: none; background: #b71c1c; color: white; align-items: center; justify-content: center;">
-                            <span>Stop</span>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Live progress area -->
-                <div id="probeProgressSection" style="margin-top: 1.4em;">
-                    <div style="font-size: 0.85em; margin-bottom: 0.5em;">
-                        <span id="lblTaskStatus" style="color: #999;">Status: Idle</span>
-                    </div>
-
-                    <div style="width: 100%; height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 3px; overflow: hidden;">
-                        <div id="probeProgressBar" style="width: 0%; height: 100%; background: #00a4dc; transition: width 0.25s ease;"></div>
-                    </div>
-
-                    <div id="probeCurrentItemRow" style="font-size: 0.8em; color: #777; margin-top: 0.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                        Probing: <span id="lblCurrentItem" style="color: #bbb;">-</span>
-                    </div>
-                </div>
-
             </div>
         </div>
 
-        <!-- Configuration form -->
+        <!-- 4-Card Informational Metrics Grid -->
+        <div class="quickstrm-metrics-grid">
+            <!-- Metric 1: Circuit State -->
+            <div class="quickstrm-metric-card">
+                <div class="quickstrm-metric-title">Circuit State</div>
+                <div id="metricCircuitState" class="quickstrm-metric-value" style="color: #4caf50;">Closed</div>
+                <div id="metricCircuitSub" class="quickstrm-metric-sub">Normal Operation</div>
+            </div>
+
+            <!-- Metric 2: Cooldown Timer -->
+            <div class="quickstrm-metric-card">
+                <div class="quickstrm-metric-title">Cooldown Timer</div>
+                <div id="metricCooldownTimer" class="quickstrm-metric-value">0:00</div>
+                <div id="metricCooldownSub" class="quickstrm-metric-sub">Inactive</div>
+            </div>
+
+            <!-- Metric 3: Total Probes -->
+            <div class="quickstrm-metric-card">
+                <div class="quickstrm-metric-title">Total Probes</div>
+                <div id="metricTotalProbes" class="quickstrm-metric-value">-</div>
+                <div id="metricTotalProbesSub" class="quickstrm-metric-sub">- probed / - total</div>
+            </div>
+
+            <!-- Metric 4: Cache Size -->
+            <div class="quickstrm-metric-card">
+                <div class="quickstrm-metric-title">Cache Size</div>
+                <div id="metricCacheSize" class="quickstrm-metric-value">0</div>
+                <div id="metricCacheSub" class="quickstrm-metric-sub">Failed items cached</div>
+            </div>
+        </div>
+
+        <!-- Circuit Breaker Tripped Alert Banner (shown dynamically) -->
+        <div id="circuitBreakerBanner" class="paperList" style="display: none; background: rgba(183, 28, 28, 0.25); border: 1px solid #e53935; border-radius: 8px; padding: 1.2em; margin-bottom: 1.5em; color: #ffcdd2;">
+            <div style="font-weight: 600; font-size: 1.05em; margin-bottom: 0.3em; display: flex; align-items: center; gap: 0.4em;">
+                <span class="material-icons" style="color: #ef5350;">warning</span>
+                Circuit Breaker Tripped
+            </div>
+            <div>Consecutive probe failures exceeded safety threshold. Queue processing and auto-deletion are halted to protect system resources.</div>
+            <div id="circuitBreakerStatus" style="margin-top: 0.5em; font-weight: 500;"></div>
+            <div style="margin-top: 0.4em; font-size: 0.85em; opacity: 0.85;">Recovery is automatic once cloud mounts are reachable. Use "Reset Failure Cache" below to force an immediate manual reset.</div>
+        </div>
+
+        <!-- Pre-Probing Action & Queue Panel (paperList) -->
+        <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
+            <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1em;">Library STRM Pre-Probing</h3>
+
+            <!-- Secondary Metrics Breakdown -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08)); text-align: center;">
+                <div>
+                    <div style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-bottom: 0.2em;">Total .strm Media</div>
+                    <div id="lblSummaryTotal" style="font-size: 1.5em; font-weight: 600; color: var(--text-color, #fff);">-</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.8em; color: #81c784; margin-bottom: 0.2em;">Has Stream Info</div>
+                    <div id="lblSummaryProbed" style="font-size: 1.5em; font-weight: 600; color: #4caf50;">-</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.8em; color: #ffb74d; margin-bottom: 0.2em;">Missing Stream Info</div>
+                    <div id="lblSummaryUnprobed" style="font-size: 1.5em; font-weight: 600; color: #ff9800;">-</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.8em; color: #64b5f6; margin-bottom: 0.2em;">Persistence Queue</div>
+                    <div id="lblSummaryQueue" style="font-size: 1.5em; font-weight: 600; color: #2196f3;">-</div>
+                    <div id="lblSummaryQueueDetail" style="font-size: 0.7em; color: var(--text-muted-color, #777); margin-top: 0.2em;">0 waiting / 0 running</div>
+                </div>
+            </div>
+
+            <!-- Controls: Mode Selector & Buttons -->
+            <div class="flex align-items-center" style="gap: 1em; margin-top: 1.2em; flex-wrap: wrap;">
+                <div class="selectContainer" style="flex: 1; min-width: 180px;">
+                    <select is="emby-select" id="selectProbeMode" class="emby-select" label="Probe Mode">
+                        <option value="Incremental">Incremental probe</option>
+                        <option value="Full">Full probe</option>
+                    </select>
+                </div>
+                <div style="display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap;">
+                    <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit block emby-button" style="margin: 0; min-width: 130px;">
+                        <span>Start pre-probe</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnStopProbe" class="raised emby-button" style="margin: 0; min-width: 100px; display: none; background: #b71c1c; color: white;">
+                        <span>Stop</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnResetFailureCache" class="raised emby-button" title="Flush negative cache of failed background probes" style="margin: 0;">
+                        <span>Reset Failure Cache</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Live Progress Area -->
+            <div id="probeProgressSection" style="margin-top: 1.5em;">
+                <div style="font-size: 0.85em; margin-bottom: 0.5em; display: flex; justify-content: space-between;">
+                    <span id="lblTaskStatus" style="color: var(--text-muted-color, #999);">Status: Idle</span>
+                </div>
+
+                <div style="width: 100%; height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 3px; overflow: hidden;">
+                    <div id="probeProgressBar" style="width: 0%; height: 100%; background: var(--theme-primary-color, #00a4dc); transition: width 0.25s ease;"></div>
+                </div>
+
+                <div id="probeCurrentItemRow" style="font-size: 0.8em; color: var(--text-muted-color, #777); margin-top: 0.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    Probing: <span id="lblCurrentItem" style="color: var(--text-color, #bbb);">-</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Configuration Form (paperList) -->
         <form class="quickStrmConfigurationForm">
-            <div class="verticalSection verticalSection-extrabottompadding">
-                <div class="checkboxContainer checkboxContainer-anonymouscheckbox">
-                    <label>
-                        <input is="emby-checkbox" type="checkbox" id="chkEnableAutoProbe" />
-                        <span>Auto-probe new .strm items on library add</span>
+            <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
+                <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1.2em;">Plugin Configuration</h3>
+
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="chkEnableAutoProbe" class="emby-checkbox" />
+                        <span class="checkboxLabel">Auto-probe new .strm items on library add</span>
                     </label>
+                    <div class="fieldDescription">Automatically triggers an asynchronous probe whenever a new .strm file is detected by the library manager.</div>
                 </div>
-                <div class="checkboxContainer checkboxContainer-anonymouscheckbox">
-                    <label>
-                        <input is="emby-checkbox" type="checkbox" id="chkEnableAutoDelete" />
-                        <span>Enable Auto-Deletion of Dead STRM Links</span>
+
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="chkEnableAutoDelete" class="emby-checkbox" />
+                        <span class="checkboxLabel">Enable Auto-Deletion of Dead STRM Links</span>
                     </label>
-                    <div class="fieldDescription">Deletes the .strm file and removes it from the library when its link fails. Halted while the circuit breaker is tripped.</div>
+                    <div class="fieldDescription">Deletes the .strm file and removes it from the library when its pre-flight check returns a deterministic HTTP 404 or missing local target. Halted when the circuit breaker is tripped.</div>
                 </div>
-                <div class="inputContainer">
-                    <input is="emby-input" type="text" id="txtMountMarkerFileName" label="Mount Marker File Name (Optional)" />
-                    <div class="fieldDescription">A file that always exists on your cloud mount (e.g. .mount_ok). Searched up to 5 folders above each .strm; if missing, failures are treated as a dropped mount and nothing is deleted. If empty, an empty parent folder is treated as a dropped mount.</div>
+
+                <div class="inputContainer" style="margin-bottom: 1.8em;">
+                    <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input" label="Mount Marker File Name (Optional)" />
+                    <div class="fieldDescription">A file that always exists on your cloud mount (e.g. .mount_ok). Traverses up to 5 parent folders above each .strm; if missing, failures are treated as a dropped mount and deletion is suppressed. If empty, an empty parent folder is treated as a dropped mount.</div>
                 </div>
+
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                         <span>Save</span>

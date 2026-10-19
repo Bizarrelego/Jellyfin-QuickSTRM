@@ -67,6 +67,9 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// <summary>Gets the total number of items queued or running for background persistence.</summary>
     public int PersistQueueTotal => _pendingPersist.Count;
 
+    /// <summary>Gets the number of items currently in the negative failure cache.</summary>
+    public int FailureCacheCount => _failedItemIds.Count;
+
     // protects low-end CPUs (e.g. Core i3): hard ceiling of exactly 2 concurrent ffprobe-backed refreshes across ALL callers
     // (bulk, auto-probe and inline), so probes can never exceed the 2 threads we can spare without starving playback
     private const int MaxConcurrentProbes = 2;

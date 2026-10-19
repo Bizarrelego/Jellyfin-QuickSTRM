@@ -50,7 +50,9 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             new PluginPageInfo
             {
                 Name = "QuickStrmConfigurationPage",
-                EmbeddedResourcePath = ns + ".Configuration.configPage.html"
+                EmbeddedResourcePath = ns + ".Configuration.configPage.html",
+                EnableInMainMenu = true,
+                MenuIcon = "bolt"
             },
             new PluginPageInfo
             {
