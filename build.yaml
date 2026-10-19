@@ -1,8 +1,7 @@
 ---
 name: "QuickSTRM"
 guid: "1278dbd6-8399-46c0-8e64-31f2d9e022ae"
-# Version reset to 1.0.0.0 establishes a clean semantic versioning baseline for the standalone QuickSTRM fork
-version: "1.0.0.0"
+version: "1.0.1"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Eliminates ffprobe latency when playing .strm files for near-instant playback start"

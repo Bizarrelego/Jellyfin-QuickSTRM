@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.1] - 2026-10-19
+
+### 🔧 Stability, Auto-Recovery & Compatibility Updates
+
+- **Circuit Breaker Auto-Recovery**: Implemented a 5-minute auto-recovery cooldown with an atomic Half-Open trial state requiring end-to-end ffprobe validation before closing the breaker.
+- **Trial Request Isolation**: Innocent requests arriving while a trial is in flight or cooling down exit immediately without polluting the 1-hour negative cache or incrementing failure counters.
+- **Dead Link Auto-Deletion with Mount Guard**: Added optional automatic deletion for deterministic 404 dead links and missing local files, backed by ancestor mount marker checks to protect against disconnected cloud mounts.
+- **Jellyfin 10.11 ActivityLog Compatibility**: Updated activity notifications to strictly use the parameterized `ActivityLog("QuickSTRM", "System", Guid.Empty)` constructor without deprecated `Severity`.
+- **Release Workflow Hardening**: Updated GitHub Actions release workflow with recursive directory packaging, runtime assembly leak validation, and literal changelog extraction.
+
 ## [1.0.0] - 2026-10-19
 
 ### 🚀 Initial Standalone Release (QuickSTRM)
