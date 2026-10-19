@@ -62,7 +62,7 @@ jobs:
       - name: Deploy Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: main
+          tag_name: latest
           target_commitish: main
           draft: false
           prerelease: false
