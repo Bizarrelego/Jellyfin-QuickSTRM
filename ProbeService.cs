@@ -19,7 +19,6 @@ using MediaBrowser.Model.Dlna;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.MediaInfo;
 using MediaBrowser.Model.Activity;
-using ActivityLog = Jellyfin.Database.Implementations.Entities.ActivityLog;
 
 namespace QuickSTRM;
 
@@ -399,7 +398,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     Notify(
                         "QuickSTRM Circuit Breaker Tripped",
                         $"Cloud mount down. Retrying in {CircuitCooldown.TotalMinutes:0} minutes.",
-                        Microsoft.Extensions.Logging.LogLevel.Critical);
+                        LogLevel.Error);
                 }
             }
         }
@@ -459,7 +458,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     Notify(
                         "QuickSTRM Circuit Breaker Reset",
                         "Cloud mount restored.",
-                        Microsoft.Extensions.Logging.LogLevel.Information);
+                        LogLevel.Information);
                 }
                 else
                 {
@@ -476,13 +475,13 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     // fire-and-forget admin notification in Jellyfin's activity log; never allowed to throw into the probe path
-    private void Notify(string name, string overview, Microsoft.Extensions.Logging.LogLevel severity)
+    private void Notify(string name, string overview, LogLevel severity)
     {
         _ = Task.Run(async () =>
         {
             try
             {
-                await _activityManager.CreateAsync(new ActivityLog(name, "QuickSTRM", Guid.Empty)
+                await _activityManager.CreateAsync(new ActivityLogEntry(name, "QuickSTRM", Guid.Empty)
                 {
                     Overview = overview,
                     ShortOverview = overview,
@@ -532,11 +531,11 @@ public sealed class ProbeService : IHostedService, IDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // FileNotFoundException/DirectoryNotFoundException both derive from IOException; classify them explicitly first
-            var kind = FailureKind.TemporaryFailure;
+            var failureKind = FailureKind.TemporaryFailure;
             if (ex is FileNotFoundException && IsParentDirectoryReadable(item.Path))
             {
                 // the parent directory is confirmed present and readable, so only the .strm itself is gone
-                kind = FailureKind.PermanentFailure;
+                failureKind = FailureKind.PermanentFailure;
             }
             else if (ex is not (FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException))
             {
@@ -550,9 +549,9 @@ public sealed class ProbeService : IHostedService, IDisposable
                 "QuickSTRM: .strm file unavailable for {Name}: {Path} ({Kind})",
                 item.Name,
                 item.Path,
-                kind);
+                failureKind);
             MarkPersistFailed(item);
-            HandleFailure(item, kind);
+            HandleFailure(item, failureKind);
             return false;
         }
 
