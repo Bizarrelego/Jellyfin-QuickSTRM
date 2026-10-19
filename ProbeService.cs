@@ -481,11 +481,14 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             try
             {
-                await _activityManager.CreateAsync(new ActivityLogEntry(name, "QuickSTRM", Guid.Empty)
+                await _activityManager.CreateAsync(new Jellyfin.Database.Implementations.Entities.ActivityLog
                 {
+                    Name = name,
                     Overview = overview,
                     ShortOverview = overview,
-                    Severity = severity
+                    Type = "System",
+                    Severity = severity,
+                    DateCreated = DateTime.UtcNow
                 }).ConfigureAwait(false);
             }
             catch (Exception ex)
