@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using QuickSTRM;
+using QuickSTRM.Configuration;
+using QuickSTRM.Models;
 
 namespace QuickSTRM.Api;
 
@@ -147,57 +149,93 @@ public class QuickStrmController : ControllerBase
 
     /// <summary>
     /// Receives live incoming JSON webhook payloads from Radarr, Sonarr, and Whisparr.
-    /// Protected via a dedicated query string token; debounces filesystem monitor reports to protect SQLite,
-    /// and enqueues newly detected items into the High Priority lane immediately.
+    /// Protected via a dedicated query string token; validates strongly-typed payload schema,
+    /// debounces filesystem monitor reports to protect SQLite, and enqueues newly detected items into the High Priority lane.
     /// </summary>
     [HttpPost("ArrWebhook")]
-    public async Task<ActionResult> HandleArrWebhook()
+    public async Task<ActionResult> HandleArrWebhook([FromBody] ArrWebhookPayload? payload)
     {
-        // 1. Authorize using dedicated WebhookSecret query token
+        // 1. Immediately validate parsed payload
+        if (payload is null || string.IsNullOrWhiteSpace(payload.EventType))
+        {
+            return BadRequest(new { status = "bad_request", message = "Invalid or missing webhook payload." });
+        }
+
+        // 2. Authorize using dedicated WebhookSecret query token
         var config = Plugin.Instance?.Configuration;
         var expectedSecret = config?.WebhookSecret;
-        var providedToken = Request.Query["token"].ToString();
-
-        if (string.IsNullOrEmpty(expectedSecret) || string.IsNullOrEmpty(providedToken) || !string.Equals(expectedSecret, providedToken, StringComparison.Ordinal))
+        if (!string.IsNullOrEmpty(expectedSecret))
         {
-            _logger.LogWarning("QuickSTRM Webhook: Unauthorized access attempt - invalid or missing security token");
-            return Unauthorized(new { status = "unauthorized", message = "Invalid or missing webhook token." });
+            var providedToken = Request?.Query != null && Request.Query.TryGetValue("token", out var tokenVal) ? tokenVal.ToString() : null;
+            if (string.IsNullOrEmpty(providedToken) || !string.Equals(expectedSecret, providedToken, StringComparison.Ordinal))
+            {
+                _logger.LogWarning("QuickSTRM Webhook: Unauthorized access attempt - invalid or missing security token");
+                return Unauthorized(new { status = "unauthorized", message = "Invalid or missing webhook token." });
+            }
         }
 
         try
         {
-            using var reader = new StreamReader(Request.Body, Encoding.UTF8);
-            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(body))
-            {
-                return Ok(new { status = "empty_body" });
-            }
-
-            using var doc = JsonDocument.Parse(body);
-            var root = doc.RootElement;
-            var eventType = root.TryGetProperty("eventType", out var et) ? et.GetString() : "Unknown";
-
+            // 3. Switch on EventType to extract file path or handle unsupported/test events
             string? incomingPath = null;
-            if (root.TryGetProperty("movieFile", out var mf) && mf.TryGetProperty("path", out var mfp))
+            switch (payload.EventType.Trim())
             {
-                incomingPath = mfp.GetString();
-            }
-            else if (root.TryGetProperty("episodeFile", out var ef) && ef.TryGetProperty("path", out var efp))
-            {
-                incomingPath = efp.GetString();
-            }
-            else if (root.TryGetProperty("movie", out var m) && m.TryGetProperty("folderPath", out var mfp2))
-            {
-                incomingPath = mfp2.GetString();
-            }
-            else if (root.TryGetProperty("series", out var s) && s.TryGetProperty("path", out var sfp))
-            {
-                incomingPath = sfp.GetString();
+                case "Test":
+                case "test":
+                case "Grab":
+                case "grab":
+                    _logger.LogInformation("QuickSTRM Webhook: Received {EventType} event (acknowledged without enqueuing)", payload.EventType);
+                    return Ok(new { status = "success", message = $"{payload.EventType} acknowledged", eventType = payload.EventType });
+
+                case "Download":
+                case "download":
+                    // Radarr/Whisparr: Movie.FilePath or MovieFile.Path; Sonarr: Episodes (Path or SourcePath), EpisodeFile.Path, or Series.Path
+                    incomingPath = payload.Movie?.FilePath
+                        ?? payload.MovieFile?.Path
+                        ?? payload.Movie?.FolderPath
+                        ?? ExtractEpisodePath(payload)
+                        ?? payload.EpisodeFile?.Path
+                        ?? payload.Series?.Path;
+                    break;
+
+                case "Rename":
+                case "rename":
+                    incomingPath = payload.Movie?.FilePath
+                        ?? payload.MovieFile?.Path
+                        ?? payload.Movie?.FolderPath
+                        ?? ExtractEpisodePath(payload)
+                        ?? payload.EpisodeFile?.Path
+                        ?? payload.Series?.Path;
+                    break;
+
+                case "MovieFileDelete":
+                case "MovieDelete":
+                case "movieFileDelete":
+                case "movieDelete":
+                    incomingPath = payload.Movie?.FilePath
+                        ?? payload.MovieFile?.Path
+                        ?? payload.Movie?.FolderPath;
+                    break;
+
+                case "EpisodeFileDelete":
+                case "SeriesDelete":
+                case "episodeFileDelete":
+                case "seriesDelete":
+                    incomingPath = ExtractEpisodePath(payload)
+                        ?? payload.EpisodeFile?.Path
+                        ?? payload.Series?.Path;
+                    break;
+
+                default:
+                    _logger.LogInformation("QuickSTRM Webhook: Ignored unsupported event type '{EventType}'", payload.EventType);
+                    return Ok(new { status = "ignored", reason = "unsupported_event_type", eventType = payload.EventType });
             }
 
+            // 4. Validate extracted file path
             if (string.IsNullOrWhiteSpace(incomingPath))
             {
-                return Ok(new { status = "ignored", reason = "no_path_found", eventType });
+                _logger.LogWarning("QuickSTRM Webhook: Received {EventType} event but could not extract a valid file path", payload.EventType);
+                return BadRequest(new { status = "bad_request", message = $"Could not extract a valid file path for {payload.EventType} event." });
             }
 
             var localPath = _arrIntegrationService.TranslateArrPathToLocal(incomingPath, out var instance);
@@ -206,9 +244,9 @@ public class QuickStrmController : ControllerBase
                 return Ok(new { status = "ignored", reason = "no_matching_instance_path", incomingPath });
             }
 
-            _logger.LogInformation("QuickSTRM Webhook: Received {EventType} event from {Instance} for {Path} -> {LocalPath}", eventType, instance?.Name, incomingPath, localPath);
+            _logger.LogInformation("QuickSTRM Webhook: Received {EventType} event from {Instance} for {Path} -> {LocalPath}", payload.EventType, instance?.Name, incomingPath, localPath);
 
-            // 2. Debounce ILibraryMonitor updates to protect SQLite from concurrent write locks
+            // 5. Debounce ILibraryMonitor updates to protect SQLite from concurrent write locks
             _pendingFileSystemChanges.TryAdd(localPath, 0);
             lock (_debounceLock)
             {
@@ -222,7 +260,7 @@ public class QuickStrmController : ControllerBase
                 }
             }
 
-            // 3. Immediately enqueue matching .strm items into High Priority lane
+            // 6. Immediately enqueue matching .strm items into High Priority lane
             if (localPath.EndsWith(".strm", StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(localPath))
             {
                 var item = _libraryManager.FindByPath(localPath, false);
@@ -244,13 +282,34 @@ public class QuickStrmController : ControllerBase
                 }
             }
 
-            return Ok(new { status = "success", eventType, localPath });
+            return Ok(new { status = "success", eventType = payload.EventType, localPath });
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "QuickSTRM: Error processing *arr webhook payload");
             return Ok(new { status = "error", message = ex.Message });
         }
+    }
+
+    private static string? ExtractEpisodePath(ArrWebhookPayload payload)
+    {
+        if (payload.Episodes is not null)
+        {
+            foreach (var ep in payload.Episodes)
+            {
+                if (!string.IsNullOrWhiteSpace(ep.Path))
+                {
+                    return ep.Path;
+                }
+
+                if (!string.IsNullOrWhiteSpace(ep.SourcePath))
+                {
+                    return ep.SourcePath;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static void OnDebounceTimerElapsed(object? state)
@@ -315,6 +374,21 @@ public class QuickStrmController : ControllerBase
     {
         var results = await _arrIntegrationService.RemoveAllWebhooksAsync().ConfigureAwait(false);
         return Ok(results);
+    }
+
+    /// <summary>
+    /// Performs a live connectivity check against an *arr instance without saving configuration or provisioning webhooks.
+    /// </summary>
+    [HttpPost("Arr/TestConnection")]
+    [Authorize(Policy = "RequiresElevation")]
+    public async Task<ActionResult> TestArrConnection([FromBody] ArrInstanceConfig testConfig, CancellationToken ct)
+    {
+        var (success, message) = await _arrIntegrationService.TestConnectionAsync(testConfig, ct).ConfigureAwait(false);
+        return Ok(new
+        {
+            Success = success,
+            Message = message
+        });
     }
 
     /// <summary>

@@ -397,6 +397,74 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
     }
 
     /// <summary>
+    /// Performs a live connectivity check against an *arr instance without persisting configuration or provisioning webhooks.
+    /// Sends a GET request to {config.BaseUrl}/api/v3/system/status using the provided API key in the X-Api-Key header.
+    /// </summary>
+    public async Task<(bool Success, string Message)> TestConnectionAsync(ArrInstanceConfig config, CancellationToken ct = default)
+    {
+        if (config is null || string.IsNullOrWhiteSpace(config.BaseUrl) || string.IsNullOrWhiteSpace(config.ApiKey))
+        {
+            return (false, "Base URL and API Key are required.");
+        }
+
+        var baseUrl = config.BaseUrl.Trim().TrimEnd('/');
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v3/system/status");
+            request.Headers.Add("X-Api-Key", config.ApiKey.Trim());
+
+            using var response = await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                try
+                {
+                    var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    using var doc = JsonDocument.Parse(body);
+                    var root = doc.RootElement;
+                    var version = root.TryGetProperty("version", out var v) ? v.GetString() : null;
+                    var appName = root.TryGetProperty("appName", out var an) ? an.GetString()
+                        : root.TryGetProperty("instanceName", out var iname) ? iname.GetString()
+                        : null;
+
+                    var name = !string.IsNullOrWhiteSpace(appName) ? appName : config.ArrType.ToString();
+                    var verStr = !string.IsNullOrWhiteSpace(version) ? $" (v{version})" : string.Empty;
+                    return (true, $"Connected to {name}{verStr} successfully.");
+                }
+                catch
+                {
+                    return (true, "Connection successful.");
+                }
+            }
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                return (false, $"Authentication failed (HTTP {(int)response.StatusCode}). Please verify your API Key.");
+            }
+
+            return (false, $"Server returned HTTP {(int)response.StatusCode} ({response.ReasonPhrase}).");
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "QuickSTRM: Connection test to {Url} failed", baseUrl);
+            return (false, $"Connection failed: {ex.Message}");
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "QuickSTRM: Connection test to {Url} timed out", baseUrl);
+            return (false, "Connection timed out. Please verify that the Base URL is reachable.");
+        }
+        catch (OperationCanceledException)
+        {
+            return (false, "Connection test was cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "QuickSTRM: Error during connection test to {Url}", baseUrl);
+            return (false, $"Connection error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Translates an incoming file path from an *arr webhook payload to a local Jellyfin filesystem path.
     /// </summary>
     public string? TranslateArrPathToLocal(string incomingPath, out ArrInstanceConfig? matchedInstance)

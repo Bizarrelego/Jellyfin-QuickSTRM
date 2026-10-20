@@ -95,6 +95,13 @@
                 margin-left: 0.4em;
             }
 
+            .quickstrm-form-row {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 1em;
+                margin-bottom: 1em;
+            }
+
             @media (max-width: 720px) {
                 .quickstrm-metrics-grid {
                     grid-template-columns: 1fr;
@@ -102,6 +109,10 @@
                 .quickstrm-arr-card {
                     flex-direction: column;
                     align-items: flex-start;
+                }
+                .quickstrm-form-row {
+                    grid-template-columns: 1fr;
+                    gap: 0.8em;
                 }
             }
         </style>
@@ -251,42 +262,56 @@
 
             <!-- Add/Edit Instance Panel (collapsible) -->
             <div id="arrAddInstancePanel" style="display: none; padding: 1.2em; margin-top: 1.2em; border: 1px dashed var(--line-color, rgba(255, 255, 255, 0.2)); border-radius: 8px;">
-                <h4 style="margin: 0 0 1em 0; font-size: 1.05em;">Add *arr Connection</h4>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-bottom: 1em;">
+                <h4 style="margin: 0 0 1em 0; font-size: 1.05em; display: flex; align-items: center; gap: 0.4em;">
+                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span>
+                    Add *arr Connection
+                </h4>
+                <div class="quickstrm-form-row">
                     <div class="inputContainer">
-                        <input is="emby-input" type="text" id="addArrName" class="emby-input" label="Instance Name (e.g. Radarr 4K)" />
+                        <label class="inputLabel" for="addArrName">Instance Name</label>
+                        <input is="emby-input" type="text" id="addArrName" class="emby-input" placeholder="e.g., Local Radarr" />
                     </div>
                     <div class="selectContainer">
-                        <select is="emby-select" id="addArrType" class="emby-select" label="Application Type">
+                        <label class="selectLabel" for="addArrType">Application Type</label>
+                        <select is="emby-select" id="addArrType" class="emby-select">
                             <option value="Radarr">Radarr</option>
                             <option value="Sonarr">Sonarr</option>
                             <option value="Whisparr">Whisparr</option>
                         </select>
                     </div>
                 </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-bottom: 1em;">
+                <div class="quickstrm-form-row">
                     <div class="inputContainer">
-                        <input is="emby-input" type="text" id="addArrBaseUrl" class="emby-input" label="Base URL (e.g. http://192.168.1.50:7878)" />
+                        <label class="inputLabel" for="addArrBaseUrl">Base URL</label>
+                        <input is="emby-input" type="text" id="addArrBaseUrl" class="emby-input" placeholder="e.g., http://192.168.1.100:7878" />
+                        <div class="fieldDescription">The reachable URL of the *arr instance. Do not include trailing slashes.</div>
                     </div>
                     <div class="inputContainer">
-                        <input is="emby-input" type="text" id="addArrApiKey" class="emby-input" label="API Key" />
-                    </div>
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-bottom: 1.2em;">
-                    <div class="inputContainer">
-                        <input is="emby-input" type="text" id="addArrPathFrom" class="emby-input" label="Path Scheme in *arr (e.g. /movies)" />
-                    </div>
-                    <div class="inputContainer">
-                        <input is="emby-input" type="text" id="addArrPathTo" class="emby-input" label="Path Scheme in Jellyfin (e.g. /mnt/cloud/movies)" />
+                        <label class="inputLabel" for="addArrApiKey">API Key</label>
+                        <input is="emby-input" type="text" id="addArrApiKey" class="emby-input" placeholder="Enter 32-character API Key" />
+                        <div style="margin-top: 0.5em;">
+                            <button is="emby-button" type="button" id="btnTestArrConnection" class="raised">Test Connection</button>
+                        </div>
                     </div>
                 </div>
+                <div class="quickstrm-form-row" style="margin-bottom: 0.4em;">
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="addArrPathFrom">Remote Path (*arr)</label>
+                        <input is="emby-input" type="text" id="addArrPathFrom" class="emby-input" placeholder="e.g., /movies" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="addArrPathTo">Local Path (Jellyfin)</label>
+                        <input is="emby-input" type="text" id="addArrPathTo" class="emby-input" placeholder="e.g., /media/movies" />
+                    </div>
+                </div>
+                <div class="fieldDescription" style="margin-bottom: 1.2em;">Used to translate paths from incoming webhooks. If your *arr container and Jellyfin container mount the same paths, leave these blank.</div>
                 <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.4em;">
                     <label class="emby-checkbox-label">
                         <input is="emby-checkbox" type="checkbox" id="addArrAutoHeal" class="emby-checkbox" checked />
                         <span class="checkboxLabel">Auto-Heal on 404 (Delete file record &amp; trigger replacement search command)</span>
                     </label>
                 </div>
-                <div style="display: flex; gap: 0.6em;">
+                <div style="display: flex; gap: 0.6em; flex-wrap: wrap;">
                     <button is="emby-button" type="button" id="btnSaveArrInstance" class="raised button-submit emby-button">
                         <span>Save Connection</span>
                     </button>
@@ -311,12 +336,14 @@
                     Scan and update target URLs inside all .strm files across your entire Jellyfin library (e.g. after domain migrations, CDN switches, or mount scheme changes).
                 </div>
 
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-bottom: 1em;">
+                <div class="quickstrm-form-row">
                     <div class="inputContainer">
-                        <input is="emby-input" type="text" id="txtRewriteOldPrefix" class="emby-input" label="Old Prefix (e.g. https://old-cdn.com/)" />
+                        <label class="inputLabel" for="txtRewriteOldPrefix">Old Prefix</label>
+                        <input is="emby-input" type="text" id="txtRewriteOldPrefix" class="emby-input" placeholder="e.g. https://old-cdn.com/" />
                     </div>
                     <div class="inputContainer">
-                        <input is="emby-input" type="text" id="txtRewriteNewPrefix" class="emby-input" label="New Prefix (e.g. https://new-cdn.com/)" />
+                        <label class="inputLabel" for="txtRewriteNewPrefix">New Prefix</label>
+                        <input is="emby-input" type="text" id="txtRewriteNewPrefix" class="emby-input" placeholder="e.g. https://new-cdn.com/" />
                     </div>
                 </div>
 

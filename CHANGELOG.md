@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.0] - 2026-10-19
+
+### 🚀 Major Platform Upgrade & Zero-Touch Orchestration Suite
+
+Major release establishing QuickSTRM as a self-contained, zero-touch `.strm` orchestration, playback acceleration, and maintenance suite natively targeting **Jellyfin 12.2.0** on **.NET 10.0**. This release completely eliminates host-level bash scripts, container wrappers, and manual webhook registration in favor of pure in-process automation, hardware safeguards, and enterprise-grade resilience.
+
+### Added
+- **Jellyfin 12.2.0 ABI & .NET 10 Migration**:
+  - Upgraded target framework to `net10.0` aligned with the Jellyfin 12.2 server runtime.
+  - Set plugin Target ABI to `12.2.0.0` for full plugin loader compatibility.
+  - Updated GitHub Actions CI/CD release workflow to compile with .NET 10 SDK (`10.0.x`).
+  - Integrated FFmpeg 8.1 media handling, preserving Intel QuickSync (QSV) hardware acceleration paths for H.264 video and AAC/AC3 audio on Fire TV Stick 4K and Astra streaming clients.
+- **Native Responsive Dashboard & Live Connection Testing**:
+  - Built an elevated, responsive management dashboard embedded in the Jellyfin web UI with a custom Material Design `bolt` icon.
+  - Implemented non-mutating live connection testing (`POST /QuickStrm/Arr/TestConnection`) via a dedicated "Test Connection" button (`#btnTestArrConnection`) adjacent to the API Key field in the Add Connection panel.
+  - Added real-time DOM status badges (`Synced` in green, `Unsynced/Error` in red) reflecting the active synchronization state of each configured instance.
+  - Integrated real-time telemetry metrics: Circuit State, Cooldown Timer, Queue Depth (High/Low lanes), and Active Probes.
+- **Zero-Touch \*arr Suite Orchestration**:
+  - Automated webhook provisioning and synchronization across Radarr, Sonarr, and Whisparr without external configuration files or host scripts.
+  - Background exponential backoff retry loop (5 attempts: 10s, 20s, 40s, 80s, 160s) to handle container startup race conditions when Jellyfin boots before \*arr instances.
+  - Synchronous manual override (`SyncSingleInstanceAsync` / `/QuickStrm/Arr/TestAndSync`) allowing instant manual re-syncing without UI locking.
+  - One-click zero-footprint webhook teardown (`POST /QuickStrm/Arr/WipeWebhooks`) to cleanly purge all QuickSTRM-registered notifications upon removal.
+- **Autonomous "Auto-Heal on 404" Pipeline**:
+  - Automatic dead link detection intercepting HTTP 404 errors and broken remote streams during playback or pre-flight checks.
+  - Ancestor mount marker validation (e.g., `.mount_ok`) preventing catastrophic mass deletions if an upstream cloud mount (rclone, Google Drive, WebDAV) disconnects.
+  - Reverse path translation (`PathTo` &rarr; `PathFrom`) resolving local Jellyfin file paths to external \*arr paths.
+  - Automated deletion of dead file records via \*arr REST APIs paired with immediate automated replacement grab commands (`MoviesSearch`, `EpisodeSearch`, `SeriesSearch`).
+- **Low-Power Hardware Safeguards & Playback Acceleration**:
+  - **Debounced SQLite I/O with 50ms Pacing**: Batches filesystem monitor updates and injects 50ms pacing between SQLite writes, eliminating write-lock contention (`database is locked`) during bulk season grabs on low-power hosts (e.g., Intel Core i3).
+  - **Deferred Virtual Chapter Synthesis**: Virtual 5-minute chapter synthesis is decoupled from initial playback and deferred to the `PlaybackStopped` session event, ensuring zero database write-locks while Fire TV Stick 4K or Astra clients request initial video chunks.
+  - **Next-Episode Pre-Warming**: Predictively resolves and enqueues the next sequential episode in the High Priority lane upon playback start for buffer-free, instantaneous autoplay transitions.
+  - **Global 2-Slot Concurrency Gate**: Bounded `SemaphoreSlim(2, 2)` limiting concurrent `ffprobe` processes across playback and batch scans, preventing CPU starvation.
+- **Strict Webhook JSON Schema Models**:
+  - Created strongly-typed `ArrWebhookPayload` POCOs with `[JsonPropertyName]` mappings, eliminating `dynamic`, `JObject`, and DOM walks to reduce memory allocations and GC pressure.
+  - Nested strongly-typed models: `MovieInfo` (`FolderPath`, `FilePath`), `SeriesInfo` (`Path`), `EpisodeInfo` (`Path`, `SourcePath`), and `FileInfo` (`Path`, `RelativePath`).
+
+### Changed
+- **Webhook Endpoint Signature & Routing**: Updated `POST /QuickStrm/ArrWebhook` to accept `[FromBody] ArrWebhookPayload? payload`.
+- **Immediate Payload Validation**: Replaced loose JSON parsing with immediate validation returning `400 Bad Request` if the payload or `EventType` is null or whitespace.
+- **Switch-Based Path Extraction**: Implemented switch dispatch on `payload.EventType`, safely extracting file paths from `Movie.FilePath` (Radarr/Whisparr) or iterating `Episodes` checking `Path` and `SourcePath` (Sonarr).
+- **Graceful Unsupported Event Handling**: Unsupported or test event types (`Test`, `Grab`) cleanly return `200 OK` without enqueuing, ensuring \*arr test notifications succeed without triggering spurious errors.
+- **Refactored Session Monitoring**: Updated `SessionMonitorService` to consume Jellyfin 10.11/12.2 `PlaybackProgressEventArgs` event signatures and inject `IChapterManager` for chapter persistence.
+
+### Security
+- **Query String Security Token**: Secured incoming webhook endpoints (`/QuickStrm/ArrWebhook?token=...`) with an auto-generated per-installation cryptographic GUID (`WebhookSecret`), preventing unauthorized webhook injections.
+- **Role-Based Elevation Protection**: Enforced `[Authorize(Policy = "RequiresElevation")]` across all administrative endpoints, including `POST /QuickStrm/Arr/TestConnection`, `POST /QuickStrm/Arr/TestAndSync`, and `POST /QuickStrm/Arr/WipeWebhooks`.
+- **Isolated Non-Mutating Connection Testing**: `TestConnectionAsync` queries external \*arr status endpoints in memory without writing configuration to disk or triggering premature webhook registration.
+
+### Removed
+- **Purged Legacy Scripts**: Permanently removed the entire `scripts/` directory, including `jellyfin-notify.sh`, `strm-ffprobe-wrapper.sh`, and `bypass-ffprobe.sh`.
+- **Purged Legacy Documentation**: Deleted `ARR-JELLYFIN-AUTOMATION.md` to prevent configuration confusion with the new native dashboard workflow.
+- **Eliminated Obsolete Dependencies**: Removed manual container entrypoint hooks and host-level cron requirements.
+
+---
+
 ## [1.1.0] - 2026-10-19
 
 ### ⚡ Zero-Touch *arr Orchestration, 404 Auto-Healing & Hardware Safeguards

@@ -39,6 +39,7 @@ export default function (view) {
     var addAutoHeal = view.querySelector('#addArrAutoHeal');
     var btnSaveAdd = view.querySelector('#btnSaveArrInstance');
     var btnCancelAdd = view.querySelector('#btnCancelArrInstance');
+    var btnTestArr = view.querySelector('#btnTestArrConnection');
 
     // ── 4. STRM Tools DOM references ──
     var txtRewriteOldPrefix = view.querySelector('#txtRewriteOldPrefix');
@@ -559,6 +560,84 @@ export default function (view) {
                 addPanel.style.display = 'none';
             }
             clearAddForm();
+        });
+    }
+
+    if (btnTestArr) {
+        btnTestArr.addEventListener('click', function () {
+            var type = addType ? addType.value : 'Radarr';
+            var baseUrl = addBaseUrl ? addBaseUrl.value.trim() : '';
+            var apiKey = addApiKey ? addApiKey.value.trim() : '';
+
+            if (!baseUrl || !apiKey) {
+                Dashboard.alert({ message: 'Base URL and API Key are required.' });
+                return;
+            }
+
+            Dashboard.showLoadingMsg();
+
+            var payload = {
+                ArrType: type,
+                BaseUrl: baseUrl,
+                ApiKey: apiKey
+            };
+
+            var url = ApiClient.getUrl('QuickStrm/Arr/TestConnection');
+            var request = {
+                url: url,
+                type: 'POST',
+                data: JSON.stringify(payload),
+                dataType: 'json',
+                contentType: 'application/json'
+            };
+
+            ApiClient.fetch(request)
+                .then(function (response) {
+                    if (response && typeof response.ok !== 'undefined' && !response.ok) {
+                        var statusInfo = response.statusText ? (response.statusText + ' (' + response.status + ')') : ('HTTP ' + response.status);
+                        var textPromise = typeof response.text === 'function' ? response.text() : Promise.resolve('');
+                        return textPromise.then(function (body) {
+                            var errorMsg = body && body.trim().length > 0 ? body : statusInfo;
+                            try {
+                                var parsed = JSON.parse(body);
+                                if (parsed && (parsed.message || parsed.Message)) {
+                                    errorMsg = parsed.message || parsed.Message;
+                                }
+                            } catch (e) {
+                            }
+                            var err = new Error(errorMsg);
+                            err.status = response.status;
+                            throw err;
+                        });
+                    }
+                    if (response && typeof response.json === 'function') {
+                        return response.json();
+                    }
+                    return response;
+                })
+                .then(function (result) {
+                    Dashboard.hideLoadingMsg();
+
+                    var isSuccess = result && (result.Success === true || result.success === true);
+                    if (isSuccess) {
+                        Dashboard.alert({
+                            title: 'Success',
+                            message: 'Connection to ' + type + ' successful.'
+                        });
+                    } else {
+                        var errMsg = (result && (result.Message || result.message)) || 'Connection failed.';
+                        Dashboard.alert({
+                            message: errMsg
+                        });
+                    }
+                })
+                .catch(function (err) {
+                    Dashboard.hideLoadingMsg();
+                    var errMsg = extractErrorMessage(err);
+                    Dashboard.alert({
+                        message: errMsg
+                    });
+                });
         });
     }
 
