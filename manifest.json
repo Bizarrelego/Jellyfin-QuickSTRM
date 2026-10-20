@@ -12,8 +12,8 @@
         "changelog": "QuickSTRM v2.0.0 Zero-Touch Orchestration Suite:\n- Migrated to Jellyfin 12.2.0 ABI (12.2.0.0) and .NET 10.0 runtime.\n- Native responsive management dashboard with live *arr connection testing.\n- Automated *arr webhook provisioning, startup retry loop, and zero-footprint teardown.\n- Autonomous 404 dead link auto-healing with mount marker protection.\n- Low-power hardware safeguards: 50ms paced SQLite debouncing and deferred virtual chapter synthesis.\n- Secured incoming webhooks with query security tokens and strict JSON schema validation.",
         "targetAbi": "12.2.0.0",
         "sourceUrl": "https://github.com/Bizarrelego/Jellyfin-QuickSTRM/releases/download/latest/QuickSTRM.zip",
-        "checksum": "9E36DBAC75843C6AB4DCABF944EA3B53",
-        "timestamp": "2026-10-20T02:22:00Z"
+        "checksum": "FFE535DFE2237C9A58A617A809ACA371",
+        "timestamp": "2026-10-20T03:13:07Z"
       }
     ]
   }
