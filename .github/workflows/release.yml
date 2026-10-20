@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-pipeline
+  cancel-in-progress: false
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
@@ -87,6 +91,8 @@ jobs:
           
           if ! git diff-index --quiet HEAD; then
             git commit -m "chore: update manifest.json checksum [skip ci]"
+            # Pull latest changes from origin/main to prevent race-condition non-fast-forward rejection
+            git pull --rebase origin main || true
             # Explicitly push to the branch ref to bypass ambiguous tag/branch naming
             git push origin HEAD:refs/heads/main
           fi
