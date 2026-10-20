@@ -8,8 +8,8 @@ using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.Chapters;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Hosting;
@@ -26,7 +26,7 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
     private readonly ISessionManager _sessionManager;
     private readonly ILibraryManager _libraryManager;
     private readonly ProbeService _probeService;
-    private readonly IItemRepository? _itemRepository;
+    private readonly IChapterManager? _chapterManager;
     private readonly ILogger<SessionMonitorService> _logger;
     private int _disposed;
 
@@ -35,13 +35,13 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
         ILibraryManager libraryManager,
         ProbeService probeService,
         ILogger<SessionMonitorService> logger,
-        IItemRepository? itemRepository = null)
+        IChapterManager? chapterManager = null)
     {
         _sessionManager = sessionManager;
         _libraryManager = libraryManager;
         _probeService = probeService;
         _logger = logger;
-        _itemRepository = itemRepository;
+        _chapterManager = chapterManager;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -58,7 +58,7 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
         return Task.CompletedTask;
     }
 
-    private void OnPlaybackStart(object? sender, PlaybackStartEventArgs e)
+    private void OnPlaybackStart(object? sender, PlaybackProgressEventArgs e)
     {
         var config = Plugin.Instance?.Configuration;
         if (config is not { EnableNextEpisodePreWarm: true })
@@ -144,7 +144,7 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
         }
     }
 
-    private void OnPlaybackStopped(object? sender, PlaybackStopEventArgs e)
+    private void OnPlaybackStopped(object? sender, PlaybackProgressEventArgs e)
     {
         var config = Plugin.Instance?.Configuration;
         if (config is not { SynthesizeVirtualChapters: true })
@@ -188,13 +188,13 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
             return;
         }
 
-        if (_itemRepository is null)
+        if (_chapterManager is null)
         {
             return;
         }
 
         // 3. Verify the item currently has 0 chapters
-        var existingChapters = _itemRepository.GetChapters(item);
+        var existingChapters = _chapterManager.GetChapters(item.Id);
         if (existingChapters is not null && existingChapters.Count > 0)
         {
             return;
@@ -217,7 +217,7 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
 
         if (chapters.Count > 0)
         {
-            _itemRepository.SaveChapters(item.Id, chapters);
+            _chapterManager.SaveChapters(item.Id, chapters);
             _logger.LogInformation(
                 "QuickSTRM: Deferred synthesis generated {Count} virtual chapters for {Name} following playback completion",
                 chapters.Count,

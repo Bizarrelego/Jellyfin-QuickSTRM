@@ -225,7 +225,7 @@ public class QuickStrmController : ControllerBase
             // 3. Immediately enqueue matching .strm items into High Priority lane
             if (localPath.EndsWith(".strm", StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(localPath))
             {
-                var item = _libraryManager.FindByPath(localPath, isDirectory: false);
+                var item = _libraryManager.FindByPath(localPath);
                 if (item is not null)
                 {
                     _probeService.EnqueueBackgroundPersist(item, highPriority: true);
@@ -235,7 +235,7 @@ public class QuickStrmController : ControllerBase
                     _ = Task.Run(async () =>
                     {
                         await Task.Delay(2000).ConfigureAwait(false);
-                        var newItem = _libraryManager.FindByPath(localPath, isDirectory: false);
+                        var newItem = _libraryManager.FindByPath(localPath);
                         if (newItem is not null)
                         {
                             _probeService.EnqueueBackgroundPersist(newItem, highPriority: true);

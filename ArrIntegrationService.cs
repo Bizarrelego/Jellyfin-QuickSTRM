@@ -24,18 +24,16 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
     private const string WebhookNotificationName = "QuickSTRM Auto-Sync";
 
     private readonly ILibraryManager _libraryManager;
-    private readonly IServerApplicationHost _applicationHost;
     private readonly ILogger<ArrIntegrationService> _logger;
     private readonly HttpClient _httpClient;
     private readonly CancellationTokenSource _shutdownCts = new();
 
     public ArrIntegrationService(
         ILibraryManager libraryManager,
-        IServerApplicationHost applicationHost,
-        ILogger<ArrIntegrationService> logger)
+        ILogger<ArrIntegrationService> logger,
+        IServerApplicationHost? applicationHost = null)
     {
         _libraryManager = libraryManager;
-        _applicationHost = applicationHost;
         _logger = logger;
         _httpClient = new HttpClient(new SocketsHttpHandler
         {
@@ -83,18 +81,6 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
         if (config is not null && !string.IsNullOrWhiteSpace(config.JellyfinBaseUrl))
         {
             return config.JellyfinBaseUrl.TrimEnd('/');
-        }
-
-        try
-        {
-            var localApi = _applicationHost.GetLocalApiUrl();
-            if (!string.IsNullOrWhiteSpace(localApi))
-            {
-                return localApi.TrimEnd('/');
-            }
-        }
-        catch
-        {
         }
 
         return "http://localhost:8096";
