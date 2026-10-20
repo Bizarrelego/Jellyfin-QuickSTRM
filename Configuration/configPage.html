@@ -1,11 +1,11 @@
 <div id="QuickStrmConfigurationPage" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/QuickSTRM.js">
-    <div class="content-primary" style="max-width: 900px; margin: 0 auto; padding: 1.5em 1em;">
+    <div class="content-primary" style="max-width: 960px; margin: 0 auto; padding: 1.5em 1em;">
         <style>
             .quickstrm-metrics-grid {
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
                 gap: 1em;
-                margin-bottom: 1.5em;
+                margin-bottom: 1.8em;
             }
 
             .quickstrm-metric-card {
@@ -26,8 +26,8 @@
             }
 
             .quickstrm-metric-title {
-                font-size: 0.8em;
-                font-weight: 500;
+                font-size: 0.78em;
+                font-weight: 600;
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
                 color: var(--text-muted-color, #999);
@@ -35,7 +35,7 @@
             }
 
             .quickstrm-metric-value {
-                font-size: 1.8em;
+                font-size: 1.7em;
                 font-weight: 700;
                 line-height: 1.2;
                 color: var(--theme-primary-color, #00a4dc);
@@ -50,9 +50,58 @@
                 text-overflow: ellipsis;
             }
 
+            .quickstrm-arr-card {
+                background: var(--card-background, rgba(255, 255, 255, 0.02));
+                border: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));
+                border-radius: 8px;
+                padding: 1em 1.2em;
+                margin-bottom: 0.8em;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                flex-wrap: wrap;
+                gap: 0.8em;
+            }
+
+            .quickstrm-badge,
+            .badge.sync-status {
+                display: inline-block;
+                padding: 0.25em 0.65em;
+                border-radius: 4px;
+                font-size: 0.75em;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+            }
+
+            .badge.sync-status.synced,
+            .quickstrm-badge-green {
+                background: rgba(76, 175, 80, 0.2);
+                color: #81c784;
+                border: 1px solid #4caf50;
+            }
+
+            .badge.sync-status.unsynced,
+            .quickstrm-badge-red {
+                background: rgba(244, 67, 54, 0.2);
+                color: #e57373;
+                border: 1px solid #f44336;
+            }
+
+            .quickstrm-badge-type {
+                background: rgba(33, 150, 243, 0.15);
+                color: #64b5f6;
+                border: 1px solid #2196f3;
+                margin-left: 0.4em;
+            }
+
             @media (max-width: 720px) {
                 .quickstrm-metrics-grid {
                     grid-template-columns: 1fr;
+                }
+                .quickstrm-arr-card {
+                    flex-direction: column;
+                    align-items: flex-start;
                 }
             }
         </style>
@@ -63,16 +112,16 @@
                 <div>
                     <h2 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">bolt</span>
-                        QuickSTRM Dashboard
+                        QuickSTRM Management Suite
                     </h2>
                     <div style="font-size: 0.9em; color: var(--text-muted-color, #888); margin-top: 0.2em;">
-                        STRM Playback Acceleration &amp; Metadata Probing
+                        Zero-Touch Playback Acceleration, *arr Orchestration &amp; Library Telemetry
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- 4-Card Informational Metrics Grid -->
+        <!-- 1. Live Telemetry Grid -->
         <div class="quickstrm-metrics-grid">
             <!-- Metric 1: Circuit State -->
             <div class="quickstrm-metric-card">
@@ -88,127 +137,265 @@
                 <div id="metricCooldownSub" class="quickstrm-metric-sub">Inactive</div>
             </div>
 
-            <!-- Metric 3: Total Probes -->
+            <!-- Metric 3: Queue Depth (High / Low) -->
             <div class="quickstrm-metric-card">
-                <div class="quickstrm-metric-title">Total Probes</div>
-                <div id="metricTotalProbes" class="quickstrm-metric-value">-</div>
-                <div id="metricTotalProbesSub" class="quickstrm-metric-sub">- probed / - total</div>
+                <div class="quickstrm-metric-title">Queue Depth (High / Low)</div>
+                <div id="metricQueueDepth" class="quickstrm-metric-value">0 / 0</div>
+                <div id="metricQueueSub" class="quickstrm-metric-sub">0 High / 0 Low Lane</div>
             </div>
 
-            <!-- Metric 4: Cache Size -->
+            <!-- Metric 4: Active Probes -->
             <div class="quickstrm-metric-card">
-                <div class="quickstrm-metric-title">Cache Size</div>
-                <div id="metricCacheSize" class="quickstrm-metric-value">0</div>
-                <div id="metricCacheSub" class="quickstrm-metric-sub">Failed items cached</div>
+                <div class="quickstrm-metric-title">Active Probes</div>
+                <div id="metricActiveProbes" class="quickstrm-metric-value">0 / 2</div>
+                <div id="metricActiveProbesSub" class="quickstrm-metric-sub">0 in cache</div>
             </div>
         </div>
 
         <!-- Circuit Breaker Tripped Alert Banner (shown dynamically) -->
-        <div id="circuitBreakerBanner" class="paperList" style="display: none; background: rgba(183, 28, 28, 0.25); border: 1px solid #e53935; border-radius: 8px; padding: 1.2em; margin-bottom: 1.5em; color: #ffcdd2;">
+        <div id="circuitBreakerBanner" class="paperList" style="display: none; background: rgba(183, 28, 28, 0.25); border: 1px solid #e53935; border-radius: 8px; padding: 1.2em; margin-bottom: 1.8em; color: #ffcdd2;">
             <div style="font-weight: 600; font-size: 1.05em; margin-bottom: 0.3em; display: flex; align-items: center; gap: 0.4em;">
                 <span class="material-icons" style="color: #ef5350;">warning</span>
                 Circuit Breaker Tripped
             </div>
-            <div>Consecutive probe failures exceeded safety threshold. Queue processing and auto-deletion are halted to protect system resources.</div>
+            <div>Consecutive probe failures exceeded the safety threshold. Queue processing and auto-deletion are halted to protect system resources.</div>
             <div id="circuitBreakerStatus" style="margin-top: 0.5em; font-weight: 500;"></div>
             <div style="margin-top: 0.4em; font-size: 0.85em; opacity: 0.85;">Recovery is automatic once cloud mounts are reachable. Use "Reset Failure Cache" below to force an immediate manual reset.</div>
         </div>
 
-        <!-- Pre-Probing Action & Queue Panel (paperList) -->
-        <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-            <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1em;">Library STRM Pre-Probing</h3>
-
-            <!-- Secondary Metrics Breakdown -->
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08)); text-align: center;">
-                <div>
-                    <div style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-bottom: 0.2em;">Total .strm Media</div>
-                    <div id="lblSummaryTotal" style="font-size: 1.5em; font-weight: 600; color: var(--text-color, #fff);">-</div>
-                </div>
-                <div>
-                    <div style="font-size: 0.8em; color: #81c784; margin-bottom: 0.2em;">Has Stream Info</div>
-                    <div id="lblSummaryProbed" style="font-size: 1.5em; font-weight: 600; color: #4caf50;">-</div>
-                </div>
-                <div>
-                    <div style="font-size: 0.8em; color: #ffb74d; margin-bottom: 0.2em;">Missing Stream Info</div>
-                    <div id="lblSummaryUnprobed" style="font-size: 1.5em; font-weight: 600; color: #ff9800;">-</div>
-                </div>
-                <div>
-                    <div style="font-size: 0.8em; color: #64b5f6; margin-bottom: 0.2em;">Persistence Queue</div>
-                    <div id="lblSummaryQueue" style="font-size: 1.5em; font-weight: 600; color: #2196f3;">-</div>
-                    <div id="lblSummaryQueueDetail" style="font-size: 0.7em; color: var(--text-muted-color, #777); margin-top: 0.2em;">0 waiting / 0 running</div>
-                </div>
-            </div>
-
-            <!-- Controls: Mode Selector & Buttons -->
-            <div class="flex align-items-center" style="gap: 1em; margin-top: 1.2em; flex-wrap: wrap;">
-                <div class="selectContainer" style="flex: 1; min-width: 180px;">
-                    <select is="emby-select" id="selectProbeMode" class="emby-select" label="Probe Mode">
-                        <option value="Incremental">Incremental probe</option>
-                        <option value="Full">Full probe</option>
-                    </select>
-                </div>
-                <div style="display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap;">
-                    <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit block emby-button" style="margin: 0; min-width: 130px;">
-                        <span>Start pre-probe</span>
-                    </button>
-                    <button is="emby-button" type="button" id="btnStopProbe" class="raised emby-button" style="margin: 0; min-width: 100px; display: none; background: #b71c1c; color: white;">
-                        <span>Stop</span>
-                    </button>
-                    <button is="emby-button" type="button" id="btnResetFailureCache" class="raised emby-button" title="Flush negative cache of failed background probes" style="margin: 0;">
-                        <span>Reset Failure Cache</span>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Live Progress Area -->
-            <div id="probeProgressSection" style="margin-top: 1.5em;">
-                <div style="font-size: 0.85em; margin-bottom: 0.5em; display: flex; justify-content: space-between;">
-                    <span id="lblTaskStatus" style="color: var(--text-muted-color, #999);">Status: Idle</span>
-                </div>
-
-                <div style="width: 100%; height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 3px; overflow: hidden;">
-                    <div id="probeProgressBar" style="width: 0%; height: 100%; background: var(--theme-primary-color, #00a4dc); transition: width 0.25s ease;"></div>
-                </div>
-
-                <div id="probeCurrentItemRow" style="font-size: 0.8em; color: var(--text-muted-color, #777); margin-top: 0.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                    Probing: <span id="lblCurrentItem" style="color: var(--text-color, #bbb);">-</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Configuration Form (paperList) -->
+        <!-- 2. Probing & Mount Protection (paperList) -->
         <form class="quickStrmConfigurationForm">
             <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-                <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1.2em;">Plugin Configuration</h3>
+                <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1.2em; display: flex; align-items: center; gap: 0.4em;">
+                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">shield</span>
+                    Probing &amp; Mount Protection
+                </h3>
 
                 <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
                     <label class="emby-checkbox-label">
                         <input is="emby-checkbox" type="checkbox" id="chkEnableAutoProbe" class="emby-checkbox" />
                         <span class="checkboxLabel">Auto-probe new .strm items on library add</span>
                     </label>
-                    <div class="fieldDescription">Automatically triggers an asynchronous probe whenever a new .strm file is detected by the library manager.</div>
+                    <div class="fieldDescription">Automatically triggers an asynchronous probe (Low Priority) whenever a new .strm file is detected by the library manager.</div>
                 </div>
 
                 <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
                     <label class="emby-checkbox-label">
                         <input is="emby-checkbox" type="checkbox" id="chkEnableAutoDelete" class="emby-checkbox" />
-                        <span class="checkboxLabel">Enable Auto-Deletion of Dead STRM Links</span>
+                        <span class="checkboxLabel">Enable Auto-Deletion of Dead STRM Links (HTTP 404)</span>
                     </label>
-                    <div class="fieldDescription">Deletes the .strm file and removes it from the library when its pre-flight check returns a deterministic HTTP 404 or missing local target. Halted when the circuit breaker is tripped.</div>
+                    <div class="fieldDescription">Deletes the .strm file and removes it from the library when its pre-flight check returns a deterministic HTTP 404. Automatically halted when the circuit breaker is tripped.</div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="chkEnableNextEpisodePreWarm" class="emby-checkbox" />
+                        <span class="checkboxLabel">Enable Next-Episode Pre-Warming</span>
+                    </label>
+                    <div class="fieldDescription">When playback starts on an episode, automatically enqueues the immediately following episode into the High Priority probe lane so its stream info is resolved before the current episode finishes.</div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="chkSynthesizeVirtualChapters" class="emby-checkbox" />
+                        <span class="checkboxLabel">Synthesize 5-Minute Virtual Chapters</span>
+                    </label>
+                    <div class="fieldDescription">Once runtime is resolved on a .strm item, creates virtual chapter markers every 5 minutes if 0 chapters exist, enabling users to jump around effortlessly without heavy chapter extraction.</div>
+                </div>
+
+                <div class="inputContainer" style="margin-bottom: 1.4em;">
+                    <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input" label="Mount Marker File Name (Optional)" />
+                    <div class="fieldDescription">A verification file that must exist on your cloud mount (e.g. .mount_ok). Traverses up to 5 parent folders above each .strm. If missing, failures are treated as a dropped mount and deletion is suppressed. If empty, an empty parent folder is treated as a dropped mount.</div>
                 </div>
 
                 <div class="inputContainer" style="margin-bottom: 1.8em;">
-                    <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input" label="Mount Marker File Name (Optional)" />
-                    <div class="fieldDescription">A file that always exists on your cloud mount (e.g. .mount_ok). Traverses up to 5 parent folders above each .strm; if missing, failures are treated as a dropped mount and deletion is suppressed. If empty, an empty parent folder is treated as a dropped mount.</div>
+                    <input is="emby-input" type="text" id="txtJellyfinBaseUrl" class="emby-input" label="Jellyfin Base URL for *arr Webhooks (Optional)" />
+                    <div class="fieldDescription">The reachable URL of this Jellyfin server as seen by your *arr instances (e.g. http://192.168.1.100:8096 or http://jellyfin:8096). Leave blank to use the internal server URL automatically.</div>
                 </div>
 
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block emby-button">
-                        <span>Save</span>
+                        <span>Save Settings</span>
                     </button>
                 </div>
             </div>
         </form>
+
+        <!-- 3. Zero-Touch *arr Suite Integration (paperList) -->
+        <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
+                <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
+                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">cloud_sync</span>
+                    Zero-Touch *arr Suite Integration
+                </h3>
+                <div style="display: flex; gap: 0.5em; flex-wrap: wrap;">
+                    <button is="emby-button" type="button" id="btnSyncArrWebhooks" class="raised button-submit emby-button" style="margin: 0;">
+                        <span>Sync Webhooks Now</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnWipeArrWebhooks" class="raised emby-button" style="margin: 0; background: #b71c1c; color: white;">
+                        <span>Wipe All *arr Webhooks</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnShowAddArrModal" class="raised emby-button" style="margin: 0;">
+                        <span>+ Add Instance</span>
+                    </button>
+                </div>
+            </div>
+            <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
+                Connect your Radarr, Sonarr, and Whisparr instances. QuickSTRM automatically provisions webhooks so that incoming STRM downloads are probed instantly in the High Priority lane, and confirmed 404 links trigger automatic searches for working replacements.
+            </div>
+
+            <!-- List of Configured Instances -->
+            <div id="arrInstancesList">
+                <div style="color: var(--text-muted-color, #777); font-size: 0.9em; padding: 1em 0;">No *arr instances configured. Click "+ Add Instance" above to connect.</div>
+            </div>
+
+            <!-- Add/Edit Instance Panel (collapsible) -->
+            <div id="arrAddInstancePanel" style="display: none; padding: 1.2em; margin-top: 1.2em; border: 1px dashed var(--line-color, rgba(255, 255, 255, 0.2)); border-radius: 8px;">
+                <h4 style="margin: 0 0 1em 0; font-size: 1.05em;">Add *arr Connection</h4>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-bottom: 1em;">
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="addArrName" class="emby-input" label="Instance Name (e.g. Radarr 4K)" />
+                    </div>
+                    <div class="selectContainer">
+                        <select is="emby-select" id="addArrType" class="emby-select" label="Application Type">
+                            <option value="Radarr">Radarr</option>
+                            <option value="Sonarr">Sonarr</option>
+                            <option value="Whisparr">Whisparr</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-bottom: 1em;">
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="addArrBaseUrl" class="emby-input" label="Base URL (e.g. http://192.168.1.50:7878)" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="addArrApiKey" class="emby-input" label="API Key" />
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-bottom: 1.2em;">
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="addArrPathFrom" class="emby-input" label="Path Scheme in *arr (e.g. /movies)" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="addArrPathTo" class="emby-input" label="Path Scheme in Jellyfin (e.g. /mnt/cloud/movies)" />
+                    </div>
+                </div>
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.4em;">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="addArrAutoHeal" class="emby-checkbox" checked />
+                        <span class="checkboxLabel">Auto-Heal on 404 (Delete file record &amp; trigger replacement search command)</span>
+                    </label>
+                </div>
+                <div style="display: flex; gap: 0.6em;">
+                    <button is="emby-button" type="button" id="btnSaveArrInstance" class="raised button-submit emby-button">
+                        <span>Save Connection</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnCancelArrInstance" class="raised emby-button">
+                        <span>Cancel</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. STRM Maintenance Tools (paperList) -->
+        <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
+            <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1em; display: flex; align-items: center; gap: 0.4em;">
+                <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">build</span>
+                STRM Maintenance Tools
+            </h3>
+
+            <!-- Tool A: Bulk URL Rewriter -->
+            <div style="margin-bottom: 2em; padding-bottom: 1.8em; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
+                <h4 style="margin: 0 0 0.4em 0; font-size: 1.05em;">Bulk URL / Path Rewriter</h4>
+                <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
+                    Scan and update target URLs inside all .strm files across your entire Jellyfin library (e.g. after domain migrations, CDN switches, or mount scheme changes).
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-bottom: 1em;">
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="txtRewriteOldPrefix" class="emby-input" label="Old Prefix (e.g. https://old-cdn.com/)" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="txtRewriteNewPrefix" class="emby-input" label="New Prefix (e.g. https://new-cdn.com/)" />
+                    </div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="chkRewriteDryRun" class="emby-checkbox" checked />
+                        <span class="checkboxLabel">Dry Run (Preview matches without writing modifications)</span>
+                    </label>
+                </div>
+
+                <button is="emby-button" type="button" id="btnRunRewrite" class="raised button-submit emby-button" style="margin: 0;">
+                    <span>Execute URL Rewrite</span>
+                </button>
+
+                <div id="rewriteResults" style="display: none; margin-top: 1.2em; padding: 1.2em; border-radius: 6px; font-family: monospace; font-size: 0.85em; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line-color, rgba(255, 255, 255, 0.1));"></div>
+            </div>
+
+            <!-- Tool B: Manual Pre-Probing & Failure Cache Management -->
+            <div>
+                <h4 style="margin: 0 0 0.8em 0; font-size: 1.05em;">Manual Library Pre-Probing</h4>
+
+                <!-- Secondary Metrics Breakdown -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08)); text-align: center;">
+                    <div>
+                        <div style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-bottom: 0.2em;">Total .strm Media</div>
+                        <div id="lblSummaryTotal" style="font-size: 1.5em; font-weight: 600; color: var(--text-color, #fff);">-</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8em; color: #81c784; margin-bottom: 0.2em;">Has Stream Info</div>
+                        <div id="lblSummaryProbed" style="font-size: 1.5em; font-weight: 600; color: #4caf50;">-</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8em; color: #ffb74d; margin-bottom: 0.2em;">Missing Stream Info</div>
+                        <div id="lblSummaryUnprobed" style="font-size: 1.5em; font-weight: 600; color: #ff9800;">-</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8em; color: #64b5f6; margin-bottom: 0.2em;">Persistence Queue</div>
+                        <div id="lblSummaryQueue" style="font-size: 1.5em; font-weight: 600; color: #2196f3;">-</div>
+                        <div id="lblSummaryQueueDetail" style="font-size: 0.7em; color: var(--text-muted-color, #777); margin-top: 0.2em;">0 waiting / 0 running</div>
+                    </div>
+                </div>
+
+                <!-- Controls: Mode Selector & Buttons -->
+                <div class="flex align-items-center" style="gap: 1em; margin-top: 1.2em; flex-wrap: wrap;">
+                    <div class="selectContainer" style="flex: 1; min-width: 180px;">
+                        <select is="emby-select" id="selectProbeMode" class="emby-select" label="Probe Mode">
+                            <option value="Incremental">Incremental probe</option>
+                            <option value="Full">Full probe</option>
+                        </select>
+                    </div>
+                    <div style="display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap;">
+                        <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit block emby-button" style="margin: 0; min-width: 130px;">
+                            <span>Start pre-probe</span>
+                        </button>
+                        <button is="emby-button" type="button" id="btnStopProbe" class="raised emby-button" style="margin: 0; min-width: 100px; display: none; background: #b71c1c; color: white;">
+                            <span>Stop</span>
+                        </button>
+                        <button is="emby-button" type="button" id="btnResetFailureCache" class="raised emby-button" title="Flush negative cache of failed background probes" style="margin: 0;">
+                            <span>Reset Failure Cache</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Live Progress Area -->
+                <div id="probeProgressSection" style="margin-top: 1.5em;">
+                    <div style="font-size: 0.85em; margin-bottom: 0.5em; display: flex; justify-content: space-between;">
+                        <span id="lblTaskStatus" style="color: var(--text-muted-color, #999);">Status: Idle</span>
+                    </div>
+
+                    <div style="width: 100%; height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 3px; overflow: hidden;">
+                        <div id="probeProgressBar" style="width: 0%; height: 100%; background: var(--theme-primary-color, #00a4dc); transition: width 0.25s ease;"></div>
+                    </div>
+
+                    <div id="probeCurrentItemRow" style="font-size: 0.8em; color: var(--text-muted-color, #777); margin-top: 0.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        Probing: <span id="lblCurrentItem" style="color: var(--text-color, #bbb);">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
 
     </div>
 </div>

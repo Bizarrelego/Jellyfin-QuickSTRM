@@ -18,6 +18,10 @@ using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Model.Dlna;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.MediaInfo;
+using System.Text;
+using System.Threading.Channels;
+using MediaBrowser.Controller.Persistence;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Activity;
 
 namespace QuickSTRM;
@@ -58,8 +62,27 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     private static string FailureKey(Guid itemId) => "QuickSTRM:persist-failed:" + itemId.ToString("N");
 
+    private readonly Channel<BaseItem> _highPriorityChannel = Channel.CreateBounded<BaseItem>(
+        new BoundedChannelOptions(MaxPendingPersist) { FullMode = BoundedChannelFullMode.DropWrite });
+    private readonly Channel<BaseItem> _lowPriorityChannel = Channel.CreateBounded<BaseItem>(
+        new BoundedChannelOptions(MaxPendingPersist) { FullMode = BoundedChannelFullMode.DropWrite });
+    private readonly List<Task> _workerTasks = new();
+    private readonly IItemRepository? _itemRepository;
+
+    /// <summary>
+    /// Event raised when a dead .strm file is deleted due to permanent 404 failure,
+    /// enabling external services (such as ArrIntegrationService) to trigger auto-healing.
+    /// </summary>
+    public event Func<string, Task>? OnStrmDeleted;
+
+    /// <summary>Gets the number of items waiting in the High Priority lane.</summary>
+    public int HighPriorityQueueWaiting => _highPriorityChannel.Reader.Count;
+
+    /// <summary>Gets the number of items waiting in the Low Priority lane.</summary>
+    public int LowPriorityQueueWaiting => _lowPriorityChannel.Reader.Count;
+
     /// <summary>Gets the number of items queued for background persistence that are still waiting for a probe slot.</summary>
-    public int PersistQueueWaiting => Math.Max(0, _pendingPersist.Count - Volatile.Read(ref _runningPersist));
+    public int PersistQueueWaiting => HighPriorityQueueWaiting + LowPriorityQueueWaiting;
 
     /// <summary>Gets the number of queued items currently being persisted (holding a probe slot).</summary>
     public int PersistQueueRunning => Volatile.Read(ref _runningPersist);
@@ -167,7 +190,8 @@ public sealed class ProbeService : IHostedService, IDisposable
         IMediaEncoder mediaEncoder,
         IMemoryCache memoryCache,
         IActivityManager activityManager,
-        ILogger<ProbeService> logger)
+        ILogger<ProbeService> logger,
+        IItemRepository? itemRepository = null)
     {
         _activityManager = activityManager;
         _libraryManager = libraryManager;
@@ -175,6 +199,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         _mediaEncoder = mediaEncoder;
         _failedPersistCache = memoryCache;
         _logger = logger;
+        _itemRepository = itemRepository;
     }
 
     // ── IHostedService lifecycle ──
@@ -182,15 +207,31 @@ public sealed class ProbeService : IHostedService, IDisposable
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _libraryManager.ItemAdded += OnItemAdded;
+
+        // Launch worker loops for the two-lane priority queue
+        for (var i = 0; i < MaxConcurrentProbes; i++)
+        {
+            _workerTasks.Add(Task.Run(() => ProcessQueueLoopAsync(_shutdownCts.Token)));
+        }
+
         return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         _libraryManager.ItemAdded -= OnItemAdded;
         _shutdownCts.Cancel();
+        _highPriorityChannel.Writer.TryComplete();
+        _lowPriorityChannel.Writer.TryComplete();
         StopProbe();
-        return Task.CompletedTask;
+
+        try
+        {
+            await Task.WhenAll(_workerTasks).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
     }
 
     // ── Auto-probe on item added ──
@@ -253,9 +294,9 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     /// <summary>
     /// Fire-and-forget: queues a standard background RefreshMetadata pass so the stream info is stored in the database
-    /// and later plays take the zero-probe fast path. Never blocks or fails the caller.
+    /// and later plays take the zero-probe fast path. High-priority lane is used for live webhooks, playback fallbacks, and next-episode pre-warming.
     /// </summary>
-    public bool EnqueueBackgroundPersist(BaseItem item)
+    public bool EnqueueBackgroundPersist(BaseItem item, bool highPriority = false)
     {
         // protects memory: already-persisted items never enter the queue
         if (HasStreamInfo(item))
@@ -263,65 +304,106 @@ public sealed class ProbeService : IHostedService, IDisposable
             return false;
         }
 
-        // prevents thread pool starvation on constrained hardware: a known-dead URL is rejected before any Task is created, so it
-        // can neither park a pool thread/continuation on the 2-slot gate nor burn a slot for 60s of a doomed probe; absolute expiration
-        // prevents perpetual lockouts by ensuring the entry expires after 1 hour even under repeated client retries
+        // prevents thread pool starvation on constrained hardware: a known-dead URL is rejected before any Task is created
         if (_failedPersistCache.TryGetValue(FailureKey(item.Id), out _))
         {
             return false;
         }
 
-        // an open breaker halts queue processing; once the cooldown has elapsed requests may queue and the half-open trial
-        // (taken in ProbeItemAsync and held until ffprobe succeeds or fails) decides whether to resume
+        // an open breaker halts queue processing; once cooldown has elapsed requests may queue
         if (_circuitTripped && (CircuitCooldownRemaining > TimeSpan.Zero || Volatile.Read(ref _halfOpenInFlight) != 0))
         {
             return false;
         }
 
-        // protects memory: bounded queue; when full we drop the request (the item is simply retried on a later play)
+        // protects memory: bounded queue ceiling across both lanes
         if (_pendingPersist.Count >= MaxPendingPersist)
         {
             _logger.LogWarning("QuickSTRM: Persist queue full ({Max}); dropping {Name}", MaxPendingPersist, item.Name);
             return false;
         }
 
-        // protects memory: TryAdd is atomic, so concurrent plays of the same item race safely and exactly one wins; the losers
-        // return here without allocating a task or closure, which keeps repeated playback attempts from flooding the queue
+        // atomic deduplication: concurrent plays/requests of the same item race safely and exactly one wins
         if (!_pendingPersist.TryAdd(item.Id, 0))
         {
             return false;
         }
 
-        _ = Task.Run(async () =>
+        var channel = highPriority ? _highPriorityChannel : _lowPriorityChannel;
+        if (!channel.Writer.TryWrite(item))
         {
+            _pendingPersist.TryRemove(item.Id, out _);
+            _logger.LogWarning("QuickSTRM: Could not enqueue {Priority} priority item {Name}; channel full", highPriority ? "High" : "Low", item.Name);
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task ProcessQueueLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            BaseItem? item = null;
+
+            // 1. Always prioritize High Priority items first
+            if (_highPriorityChannel.Reader.TryRead(out item))
+            {
+            }
+            // 2. Fall back to Low Priority lane
+            else if (_lowPriorityChannel.Reader.TryRead(out item))
+            {
+            }
+            else
+            {
+                // 3. Await whichever channel has an item available
+                try
+                {
+                    var highWait = _highPriorityChannel.Reader.WaitToReadAsync(ct).AsTask();
+                    var lowWait = _lowPriorityChannel.Reader.WaitToReadAsync(ct).AsTask();
+                    var winner = await Task.WhenAny(highWait, lowWait).ConfigureAwait(false);
+
+                    if (await winner.ConfigureAwait(false))
+                    {
+                        if (!_highPriorityChannel.Reader.TryRead(out item))
+                        {
+                            _lowPriorityChannel.Reader.TryRead(out item);
+                        }
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+
+            if (item is null)
+            {
+                continue;
+            }
+
             try
             {
-                // improves efficiency: persisting once removes the need to re-probe this item in memory on every later play;
-                // it goes through the shared 2-slot gate, so it can never exceed the process limit
                 var attempt = await ProbeItemAsync(
                     item,
                     BackgroundProbeTimeout,
-                    _shutdownCts.Token,
+                    ct,
                     onSlotAcquired: () => Interlocked.Increment(ref _runningPersist),
                     onSlotReleased: () => Interlocked.Decrement(ref _runningPersist)).ConfigureAwait(false);
 
-                // refused by the breaker/trial lock: this item did nothing wrong, so it is silently ignored - not counted, not
-                // negative-cached, and retried on a later play
                 if (attempt == ProbeAttempt.SkippedDueToTrial)
                 {
-                    return;
+                    continue;
                 }
 
-                // Jellyfin's refresh can finish "successfully" without stream info when ffprobe fails inside it, so success
-                // is judged by the item actually having a runtime afterwards, not only by the absence of an exception
                 if (attempt != ProbeAttempt.Completed || !HasStreamInfo(item))
                 {
                     MarkPersistFailed(item);
                 }
             }
-            catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // server shutdown / plugin unload: not a probe failure, nothing to cache
+                break;
             }
             catch (Exception ex)
             {
@@ -330,12 +412,18 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
             finally
             {
-                // protects memory: always free the ID (even on failure) so the entry can't leak and block the item forever
                 _pendingPersist.TryRemove(item.Id, out _);
             }
-        });
+        }
+    }
 
-        return true;
+    /// <summary>
+    /// Removes a specific item from the negative failure cache so it can be re-probed immediately.
+    /// </summary>
+    public void ClearFailureCacheForItem(Guid itemId)
+    {
+        _failedPersistCache.Remove(FailureKey(itemId));
+        _failedItemIds.TryRemove(itemId, out _);
     }
 
     /// <summary>
@@ -513,20 +601,49 @@ public sealed class ProbeService : IHostedService, IDisposable
         return await PreflightCoreAsync(item, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Reads only the first non-empty line of a .strm file up to 4096 characters,
+    /// avoiding large object heap (LOH) allocations on corrupted or binary files.
+    /// </summary>
+    public static async Task<string?> ReadStrmUrlAsync(string path, CancellationToken ct = default)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite,
+            bufferSize: 4096,
+            useAsync: true);
+
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var buffer = new char[4096];
+        var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false);
+        if (read <= 0)
+        {
+            return null;
+        }
+
+        var text = new string(buffer, 0, read);
+        using var lineReader = new StringReader(text);
+        string? line;
+        while ((line = lineReader.ReadLine()) != null)
+        {
+            var trimmed = line.Trim();
+            if (!string.IsNullOrEmpty(trimmed))
+            {
+                return trimmed;
+            }
+        }
+
+        return null;
+    }
+
     private async Task<bool> PreflightCoreAsync(BaseItem item, CancellationToken ct)
     {
         string? url;
         try
         {
-            url = null;
-            foreach (var line in await File.ReadAllLinesAsync(item.Path, ct).ConfigureAwait(false))
-            {
-                if (!string.IsNullOrWhiteSpace(line))
-                {
-                    url = line.Trim();
-                    break;
-                }
-            }
+            url = await ReadStrmUrlAsync(item.Path, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -684,14 +801,30 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         try
         {
-            if (item.Path is not null && File.Exists(item.Path))
+            var deletedPath = item.Path;
+            if (deletedPath is not null && File.Exists(deletedPath))
             {
-                File.Delete(item.Path);
+                File.Delete(deletedPath);
             }
 
             // remove from the Jellyfin library without touching disk again (file already deleted above)
             _libraryManager.DeleteItem(item, new DeleteOptions { DeleteFileLocation = false });
-            _logger.LogWarning("QuickSTRM: Auto-deleted dead .strm link {Name} ({Path})", item.Name, item.Path);
+            _logger.LogWarning("QuickSTRM: Auto-deleted dead .strm link {Name} ({Path})", item.Name, deletedPath);
+
+            if (!string.IsNullOrEmpty(deletedPath) && OnStrmDeleted is not null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await OnStrmDeleted.Invoke(deletedPath).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "QuickSTRM: OnStrmDeleted handler encountered an error for {Path}", deletedPath);
+                    }
+                });
+            }
         }
         catch (Exception ex)
         {
@@ -1022,7 +1155,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
     }
 
-    private List<BaseItem> GetStrmItems()
+    public List<BaseItem> GetStrmItems()
     {
         return _libraryManager
             .GetItemList(new InternalItemsQuery

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-10-19
+
+### ⚡ Zero-Touch *arr Orchestration, 404 Auto-Healing & Hardware Safeguards
+
+Major release transforming QuickSTRM into a zero-touch .strm management, playback acceleration, and orchestration suite running 100% natively inside Jellyfin without host-level scripting.
+
+#### Zero-Touch *arr Suite Integration
+- **Automated Webhook Provisioning**: Automatically provisions and synchronizes webhooks inside Radarr, Sonarr, and Whisparr with dedicated security query tokens (`?token=...`).
+- **Startup Exponential Backoff Retry Loop**: Resilient 5-attempt retry loop (`10s`, `20s`, `40s`, `80s`, `160s`) handles Docker container boot race conditions where Jellyfin starts before *arr instances.
+- **Zero-Footprint Webhook Teardown**: One-click "Wipe All *arr Webhooks" cleanly purges all QuickSTRM-created webhooks from external services upon uninstall.
+- **Synchronous Override**: Segregated `SyncSingleInstanceAsync` manual test & sync prevents UI locking during failed manual synchronizations.
+
+#### Autonomous "Auto-Heal on 404" Pipeline
+- **Dead Link Detection**: Intercepts deterministic HTTP 404 errors and dead cloud mount links.
+- **Mount Marker Verification**: Validates cloud mount health (e.g. `.mount_ok`) before initiating deletions to protect against unmounted cloud drives.
+- **Reverse Path Translation**: Automatically maps local Jellyfin paths (`PathTo`) to external *arr schemes (`PathFrom`).
+- **Automated Deletion & Replacement Grab**: Removes dead movie/episode records via *arr APIs and immediately dispatches search commands (`EpisodeSearch`, `SeriesSearch`, `MoviesSearch`) across Usenet and Torrent downloaders.
+
+#### Low-Power Hardware & Client Optimizations
+- **Debounced SQLite I/O with 50ms Pacing**: Batches file system monitor notifications and injects 50ms pacing between SQLite writes, eliminating write-lock contention during bulk season downloads on low-power hosts (e.g., Intel Core i3).
+- **Deferred Virtual Chapter Synthesis**: Virtual 5-minute chapter generation is deferred to the `PlaybackStopped` session event, ensuring zero database write-locks while Fire TV Stick 4K / Astra clients request initial stream chunks.
+- **Next-Episode Pre-Warming**: Predictively enqueues the next sequential episode in the High Priority probe lane during playback start, guaranteeing instant, buffer-free autoplay transitions.
+
+#### Dashboard UI & Legacy Cleanup
+- **Native Sidebar Menu Elevation**: Elevated QuickSTRM to the main Jellyfin sidebar menu with native Material Design `bolt` icon.
+- **Dynamic Instance Management**: Added real-time DOM status badges (`Synced` / `Unsynced/Error`), connection modal, and test/sync actions using vanilla ES6 and injected `ApiClient` / `Dashboard` globals.
+- **Purged Legacy Scripts**: Deleted obsolete host-level bash scripts (`jellyfin-notify.sh`, bypass wrappers, etc.) in favor of pure in-process automation.
+
 ## [1.0.1] - 2026-10-19
 
 ### 🔧 Stability, Auto-Recovery & Compatibility Updates

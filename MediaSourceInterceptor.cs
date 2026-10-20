@@ -142,7 +142,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 // the pipeline admits exactly one half-open trial that must fully succeed in ffprobe before the circuit closes
                 // the persist queue silently ignores requests refused by an open breaker or an active half-open trial (no failure count,
                 // no negative cache), and playback falls back to the raw .strm URL immediately via the unprobed `resolved` sources
-                probeService.EnqueueBackgroundPersist(item);
+                probeService.EnqueueBackgroundPersist(item, highPriority: true);
                 return resolved;
             }
 
@@ -190,7 +190,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 // improves efficiency: fire-and-forget persistence means the NEXT play takes the zero-probe path instead of
                 // re-probing in memory every time, and it never blocks the stream that is starting now; the service
                 // de-duplicates and bounds the queue, so repeated play attempts cannot flood it
-                _probeServiceFactory().EnqueueBackgroundPersist(item);
+                _probeServiceFactory().EnqueueBackgroundPersist(item, highPriority: true);
             }
             catch (Exception ex)
             {

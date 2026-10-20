@@ -18,9 +18,23 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
-        // Register ProbeService as singleton + hosted service for ItemAdded event lifecycle
+        // Register ProbeService as singleton + hosted service for ItemAdded event and queue lifecycle
         serviceCollection.AddSingleton<ProbeService>();
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ProbeService>());
+
+        // Register ArrIntegrationService as singleton + hosted service, wire 404 auto-healing event
+        serviceCollection.AddSingleton<ArrIntegrationService>();
+        serviceCollection.AddSingleton<IHostedService>(sp =>
+        {
+            var arr = sp.GetRequiredService<ArrIntegrationService>();
+            var probe = sp.GetRequiredService<ProbeService>();
+            probe.OnStrmDeleted += path => arr.TriggerArrHealAsync(path);
+            return arr;
+        });
+
+        // Register SessionMonitorService as singleton + hosted service for next-episode pre-warming
+        serviceCollection.AddSingleton<SessionMonitorService>();
+        serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SessionMonitorService>());
 
         // Decorate IMediaSourceManager with our interceptor
         var descriptor = serviceCollection.FirstOrDefault(d => d.ServiceType == typeof(IMediaSourceManager));
