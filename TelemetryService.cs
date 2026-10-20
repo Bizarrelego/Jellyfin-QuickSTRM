@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Model.Activity;
 using Microsoft.Extensions.Logging;
 using QuickSTRM.Configuration;
@@ -44,12 +45,12 @@ public class TelemetryService
                 Plugin.Instance?.SaveConfiguration();
             }
 
-            var entry = new ActivityLogEntry(name, "QuickSTRM", Guid.Empty)
+            var entry = new ActivityLog(name, "QuickSTRM", Guid.Empty)
             {
                 Overview = overview,
                 ShortOverview = overview,
-                Date = DateTime.UtcNow,
-                Severity = severity
+                DateCreated = DateTime.UtcNow,
+                LogSeverity = severity
             };
 
             await _activityManager.CreateAsync(entry).ConfigureAwait(false);

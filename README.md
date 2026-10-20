@@ -44,7 +44,7 @@ QuickSTRM is meticulously tailored for hardware-constrained host environments (s
 Cloud-mounted virtual filesystems (such as InfiniDysk or Rclone VFS) often take 3 to 10 seconds to spin up connections, fetch remote file chunks, and open initial read streams. When a user taps a movie in their client, this latency creates long loading spinners or player timeouts.
 * **Middleware Interception**: As soon as a user opens an item's detail page, `PredictivePrewarmMiddleware` intercepts the HTTP request (`^/Users/[^/]+/Items/([^/]+)$`) and passes it down the pipeline instantly without blocking the UI.
 * **Background 5MB Read**: Dispatches a background task via `VfsPrewarmService` that reads the first 5MB of the video via an HTTP Range request or local FileStream.
-* **RAM Priming**: Pages initial container headers into host memory, primes DNS and TCP/TLS sockets, and warms the VFS cache so when the user clicks "Play", playback starts **instantaneously**.
+* **RAM Priming**: Pages initial container headers into host memory, primes DNS and TCP/TLS sockets, and warms the VFS cache so when the user clicks "Play", playback starts **instantaneously** on the Fire TV Stick 4K Astra client without hammering the Core i3 CPU.
 * **5-Minute Debounce Cache**: Backed by a sliding `MemoryCache` so rapid browsing back and forth never triggers redundant network fetches.
 
 ### 2. Absolute URL Pre-Resolution (Eliminating Redirect Hops on Fire TV)

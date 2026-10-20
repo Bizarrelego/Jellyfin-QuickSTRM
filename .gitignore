@@ -1,6 +1,7 @@
 # Build Results
 [Bb]in/
 [Oo]bj/
+[Pp]ublish/
 
 # Visual Studio / Rider / VS Code
 .vs/
