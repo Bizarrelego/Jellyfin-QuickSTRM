@@ -262,7 +262,7 @@
 
             <!-- Add/Edit Instance Panel (collapsible) -->
             <div id="arrAddInstancePanel" style="display: none; padding: 1.2em; margin-top: 1.2em; border: 1px dashed var(--line-color, rgba(255, 255, 255, 0.2)); border-radius: 8px;">
-                <h4 style="margin: 0 0 1em 0; font-size: 1.05em; display: flex; align-items: center; gap: 0.4em;">
+                <h4 id="arrPanelTitle" style="margin: 0 0 1em 0; font-size: 1.05em; display: flex; align-items: center; gap: 0.4em;">
                     <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span>
                     Add *arr Connection
                 </h4>
@@ -304,7 +304,7 @@
                         <input is="emby-input" type="text" id="addArrPathTo" class="emby-input" placeholder="e.g., /media/movies" />
                     </div>
                 </div>
-                <div class="fieldDescription" style="margin-bottom: 1.2em;">Used to translate paths from incoming webhooks. If your *arr container and Jellyfin container mount the same paths, leave these blank.</div>
+                <div class="fieldDescription" style="margin-bottom: 1.2em;">Leave blank if your *arr container and Jellyfin container share the exact same volume mounts.</div>
                 <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.4em;">
                     <label class="emby-checkbox-label">
                         <input is="emby-checkbox" type="checkbox" id="addArrAutoHeal" class="emby-checkbox" checked />

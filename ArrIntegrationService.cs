@@ -213,24 +213,25 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
     /// <summary>
     /// Performs an immediate, single-attempt webhook synchronization for a single *arr instance.
     /// </summary>
-    public async Task<ArrSyncResult> SyncSingleInstanceAsync(ArrInstanceConfig instance, string webhookUrl, CancellationToken ct = default)
+    public async Task<ArrSyncResult> SyncSingleInstanceAsync(ArrInstanceConfig config, string webhookUrl, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(instance.BaseUrl) || string.IsNullOrWhiteSpace(instance.ApiKey))
+        if (string.IsNullOrWhiteSpace(config.BaseUrl) || string.IsNullOrWhiteSpace(config.ApiKey))
         {
-            return new ArrSyncResult(instance.Name, false, "BaseUrl or ApiKey missing", null);
+            return new ArrSyncResult(config.Name, false, "BaseUrl or ApiKey missing", null);
         }
 
-        var baseUrl = instance.BaseUrl.TrimEnd('/');
+        var cleanBaseUrl = config.BaseUrl.TrimEnd('/');
         try
         {
             // 1. Fetch existing notifications
-            using var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v3/notification");
-            getRequest.Headers.Add("X-Api-Key", instance.ApiKey);
+            using var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{cleanBaseUrl}/api/v3/notification");
+            getRequest.Headers.Add("X-Api-Key", config.ApiKey);
+            getRequest.Headers.Add("Accept", "application/json");
 
             using var getResponse = await _httpClient.SendAsync(getRequest, ct).ConfigureAwait(false);
             if (!getResponse.IsSuccessStatusCode)
             {
-                return new ArrSyncResult(instance.Name, false, $"HTTP {getResponse.StatusCode} retrieving notifications", null);
+                return new ArrSyncResult(config.Name, false, $"HTTP {getResponse.StatusCode} retrieving notifications", null);
             }
 
             var jsonStr = await getResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -264,17 +265,18 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
 
             if (existingId.HasValue && string.Equals(existingUrl, webhookUrl, StringComparison.OrdinalIgnoreCase))
             {
-                instance.ProvisionedWebhookId = existingId.Value;
-                return new ArrSyncResult(instance.Name, true, "Webhook already provisioned with security token", existingId.Value);
+                config.ProvisionedWebhookId = existingId.Value;
+                return new ArrSyncResult(config.Name, true, "Webhook already provisioned with security token", existingId.Value);
             }
 
             if (existingId.HasValue)
             {
                 // Existing webhook is missing token or has an outdated URL; remove it before provisioning the update
-                using var delReq = new HttpRequestMessage(HttpMethod.Delete, $"{baseUrl}/api/v3/notification/{existingId.Value}");
-                delReq.Headers.Add("X-Api-Key", instance.ApiKey);
+                using var delReq = new HttpRequestMessage(HttpMethod.Delete, $"{cleanBaseUrl}/api/v3/notification/{existingId.Value}");
+                delReq.Headers.Add("X-Api-Key", config.ApiKey);
+                delReq.Headers.Add("Accept", "application/json");
                 await _httpClient.SendAsync(delReq, ct).ConfigureAwait(false);
-                _logger.LogInformation("QuickSTRM: Cleaned up outdated webhook #{Id} on {Name} to upgrade with security token", existingId.Value, instance.Name);
+                _logger.LogInformation("QuickSTRM: Cleaned up outdated webhook #{Id} on {Name} to upgrade with security token", existingId.Value, config.Name);
             }
 
             // 2. Provision new webhook notification
@@ -296,15 +298,16 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
                 }
             };
 
-            using var postRequest = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/v3/notification");
-            postRequest.Headers.Add("X-Api-Key", instance.ApiKey);
+            using var postRequest = new HttpRequestMessage(HttpMethod.Post, $"{cleanBaseUrl}/api/v3/notification");
+            postRequest.Headers.Add("X-Api-Key", config.ApiKey);
+            postRequest.Headers.Add("Accept", "application/json");
             postRequest.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
             using var postResponse = await _httpClient.SendAsync(postRequest, ct).ConfigureAwait(false);
             if (!postResponse.IsSuccessStatusCode)
             {
                 var err = await postResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                return new ArrSyncResult(instance.Name, false, $"HTTP {postResponse.StatusCode}: {err}", null);
+                return new ArrSyncResult(config.Name, false, $"HTTP {postResponse.StatusCode}: {err}", null);
             }
 
             var postJson = await postResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -312,17 +315,17 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
             if (createdDoc.RootElement.TryGetProperty("id", out var newIdProp))
             {
                 var newId = newIdProp.GetInt32();
-                instance.ProvisionedWebhookId = newId;
-                _logger.LogInformation("QuickSTRM: Successfully auto-provisioned secured webhook #{Id} in {Name}", newId, instance.Name);
-                return new ArrSyncResult(instance.Name, true, "Secured webhook provisioned successfully", newId);
+                config.ProvisionedWebhookId = newId;
+                _logger.LogInformation("QuickSTRM: Successfully auto-provisioned secured webhook #{Id} in {Name}", newId, config.Name);
+                return new ArrSyncResult(config.Name, true, "Secured webhook provisioned successfully", newId);
             }
 
-            return new ArrSyncResult(instance.Name, true, "Secured webhook created (no ID returned)", null);
+            return new ArrSyncResult(config.Name, true, "Secured webhook created (no ID returned)", null);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "QuickSTRM: Failed to sync webhook for {Name} at {BaseUrl}", instance.Name, baseUrl);
-            return new ArrSyncResult(instance.Name, false, ex.Message, null);
+            _logger.LogWarning(ex, "QuickSTRM: Failed to sync webhook for {Name} at {BaseUrl}", config.Name, cleanBaseUrl);
+            return new ArrSyncResult(config.Name, false, ex.Message, null);
         }
     }
 
@@ -347,12 +350,13 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
                 continue;
             }
 
-            var baseUrl = instance.BaseUrl.TrimEnd('/');
+            var cleanBaseUrl = instance.BaseUrl.TrimEnd('/');
             try
             {
                 // First check if a notification named "QuickSTRM Auto-Sync" exists to be 100% sure we clean it up
-                using var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v3/notification");
+                using var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{cleanBaseUrl}/api/v3/notification");
                 getRequest.Headers.Add("X-Api-Key", instance.ApiKey);
+                getRequest.Headers.Add("Accept", "application/json");
 
                 using var getResponse = await _httpClient.SendAsync(getRequest, ct).ConfigureAwait(false);
                 if (getResponse.IsSuccessStatusCode)
@@ -368,8 +372,9 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
                             if (element.TryGetProperty("id", out var idProp))
                             {
                                 var id = idProp.GetInt32();
-                                using var deleteRequest = new HttpRequestMessage(HttpMethod.Delete, $"{baseUrl}/api/v3/notification/{id}");
+                                using var deleteRequest = new HttpRequestMessage(HttpMethod.Delete, $"{cleanBaseUrl}/api/v3/notification/{id}");
                                 deleteRequest.Headers.Add("X-Api-Key", instance.ApiKey);
+                                deleteRequest.Headers.Add("Accept", "application/json");
                                 await _httpClient.SendAsync(deleteRequest, ct).ConfigureAwait(false);
                                 _logger.LogInformation("QuickSTRM: Cleanly removed webhook #{Id} from {Name}", id, instance.Name);
                             }
@@ -407,11 +412,12 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
             return (false, "Base URL and API Key are required.");
         }
 
-        var baseUrl = config.BaseUrl.Trim().TrimEnd('/');
+        var cleanBaseUrl = config.BaseUrl.TrimEnd('/');
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v3/system/status");
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{cleanBaseUrl}/api/v3/system/status");
             request.Headers.Add("X-Api-Key", config.ApiKey.Trim());
+            request.Headers.Add("Accept", "application/json");
 
             using var response = await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
             if (response.IsSuccessStatusCode)
@@ -445,12 +451,12 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogWarning(ex, "QuickSTRM: Connection test to {Url} failed", baseUrl);
+            _logger.LogWarning(ex, "QuickSTRM: Connection test to {Url} failed", cleanBaseUrl);
             return (false, $"Connection failed: {ex.Message}");
         }
         catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
         {
-            _logger.LogWarning(ex, "QuickSTRM: Connection test to {Url} timed out", baseUrl);
+            _logger.LogWarning(ex, "QuickSTRM: Connection test to {Url} timed out", cleanBaseUrl);
             return (false, "Connection timed out. Please verify that the Base URL is reachable.");
         }
         catch (OperationCanceledException)
@@ -459,7 +465,7 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "QuickSTRM: Error during connection test to {Url}", baseUrl);
+            _logger.LogWarning(ex, "QuickSTRM: Error during connection test to {Url}", cleanBaseUrl);
             return (false, $"Connection error: {ex.Message}");
         }
     }

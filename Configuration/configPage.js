@@ -1,3 +1,5 @@
+let editingInstanceIndex = -1;
+
 export default function (view) {
     'use strict';
 
@@ -121,27 +123,6 @@ export default function (view) {
         } else {
             alert(msg);
         }
-    }
-
-    function confirmDialog(message, title) {
-        return new Promise(function (resolve) {
-            if (typeof Dashboard !== 'undefined' && typeof Dashboard.confirm === 'function') {
-                try {
-                    var p = Dashboard.confirm(message, title || 'Confirmation');
-                    if (p && typeof p.then === 'function') {
-                        p.then(function () {
-                            resolve(true);
-                        }).catch(function () {
-                            resolve(false);
-                        });
-                        return;
-                    }
-                } catch (e) {
-                    // Fallback to window.confirm below
-                }
-            }
-            resolve(window.confirm(message));
-        });
     }
 
     function callApiFetch(endpoint, method, data) {
@@ -401,20 +382,68 @@ export default function (view) {
                     '</div>' +
                 '</div>' +
                 '<div style="display: flex; gap: 0.5em; align-items: center;">' +
-                    '<button is="emby-button" type="button" class="raised emby-button btn-remove-arr" data-index="' + index + '" style="background: #b71c1c; color: white; padding: 0.4em 0.8em; font-size: 0.85em; margin: 0;">' +
-                        '<span>Remove</span>' +
-                    '</button>' +
+                    '<button is="emby-button" type="button" class="btnEditInstance raised emby-button" data-index="' + index + '" style="padding: 0.4em 0.8em; font-size: 0.85em; margin: 0;">Edit</button>' +
+                    '<button is="emby-button" type="button" class="btnDeleteInstance btn-remove-arr raised emby-button" data-index="' + index + '" style="background: #b71c1c; color: white; padding: 0.4em 0.8em; font-size: 0.85em; margin: 0;">Delete</button>' +
                 '</div>' +
             '</div>';
         });
 
         arrList.innerHTML = html;
 
-        var removeBtns = arrList.querySelectorAll('.btn-remove-arr');
+        var editBtns = arrList.querySelectorAll('.btnEditInstance');
+        editBtns.forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                var target = e.currentTarget || btn;
+                editingInstanceIndex = target.dataset.index;
+
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    var inst = config && config.ArrInstances ? config.ArrInstances[editingInstanceIndex] : null;
+                    if (!inst) { return; }
+
+                    if (addName) { addName.value = inst.Name || ''; }
+                    if (addType) { addType.value = inst.ArrType || 'Radarr'; }
+                    if (addBaseUrl) { addBaseUrl.value = inst.BaseUrl || ''; }
+                    if (addApiKey) { addApiKey.value = inst.ApiKey || ''; }
+                    if (addPathFrom) { addPathFrom.value = inst.PathFrom || ''; }
+                    if (addPathTo) { addPathTo.value = inst.PathTo || ''; }
+                    if (addAutoHeal) { addAutoHeal.checked = inst.AutoHealOn404 !== false; }
+
+                    if (addPanel) {
+                        addPanel.style.display = 'block';
+                    }
+
+                    var arrPanelTitle = view.querySelector('#arrPanelTitle');
+                    if (arrPanelTitle) {
+                        arrPanelTitle.innerHTML = '<span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">edit</span> Edit *arr Connection';
+                    }
+
+                    if (btnSaveAdd) {
+                        var span = btnSaveAdd.querySelector('span');
+                        if (span) {
+                            span.textContent = 'Update Connection';
+                        } else {
+                            btnSaveAdd.textContent = 'Update Connection';
+                        }
+                    }
+
+                    if (addPanel && typeof addPanel.scrollIntoView === 'function') {
+                        addPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                });
+            });
+        });
+
+        var removeBtns = arrList.querySelectorAll('.btnDeleteInstance, .btn-remove-arr');
         removeBtns.forEach(function (btn) {
-            btn.addEventListener('click', function () {
+            btn.addEventListener('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
                 var idx = parseInt(btn.getAttribute('data-index'), 10);
-                removeArrInstance(idx);
+                Dashboard.confirm("Are you sure?").then(function (result) {
+                    if (result) {
+                        removeArrInstance(idx);
+                    }
+                });
             });
         });
     }
@@ -446,29 +475,25 @@ export default function (view) {
     }
 
     function removeArrInstance(index) {
-        confirmDialog('Are you sure you want to remove this *arr connection?', 'Remove Connection').then(function (confirmed) {
-            if (!confirmed) { return; }
-
-            showLoading();
-            ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                var instances = config.ArrInstances || [];
-                var removed = instances.splice(index, 1)[0];
-                config.ArrInstances = instances;
-                return ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
-                    if (removed && removed.ProvisionedWebhookId) {
-                        return apiPost('QuickStrm/Arr/TestAndSync').catch(function () {
-                            // ignore errors on sync during remove
-                        });
-                    }
-                });
-            }).then(function () {
-                hideLoading();
-                return loadConfig();
-            }).catch(function (err) {
-                hideLoading();
-                showAlert('Failed to remove connection: ' + extractErrorMessage(err));
-                loadConfig();
+        showLoading();
+        ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+            var instances = config.ArrInstances || [];
+            var removed = instances.splice(index, 1)[0];
+            config.ArrInstances = instances;
+            return ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
+                if (removed && removed.ProvisionedWebhookId) {
+                    return apiPost('QuickStrm/Arr/TestAndSync').catch(function () {
+                        // ignore errors on sync during remove
+                    });
+                }
             });
+        }).then(function () {
+            hideLoading();
+            return loadConfig();
+        }).catch(function (err) {
+            hideLoading();
+            showAlert('Failed to remove connection: ' + extractErrorMessage(err));
+            loadConfig();
         });
     }
 
@@ -548,6 +573,20 @@ export default function (view) {
     // 2. Add *arr Instance Modal / Controls
     if (btnShowAddModal) {
         btnShowAddModal.addEventListener('click', function () {
+            clearAddForm();
+            editingInstanceIndex = -1;
+            if (btnSaveAdd) {
+                var span = btnSaveAdd.querySelector('span');
+                if (span) {
+                    span.textContent = 'Save Connection';
+                } else {
+                    btnSaveAdd.textContent = 'Save Connection';
+                }
+            }
+            var arrPanelTitle = view.querySelector('#arrPanelTitle');
+            if (arrPanelTitle) {
+                arrPanelTitle.innerHTML = '<span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span> Add *arr Connection';
+            }
             if (addPanel) {
                 addPanel.style.display = addPanel.style.display === 'none' ? 'block' : 'none';
             }
@@ -560,13 +599,29 @@ export default function (view) {
                 addPanel.style.display = 'none';
             }
             clearAddForm();
+            if (btnSaveAdd) {
+                var span = btnSaveAdd.querySelector('span');
+                if (span) {
+                    span.textContent = 'Save Connection';
+                } else {
+                    btnSaveAdd.textContent = 'Save Connection';
+                }
+            }
+            var arrPanelTitle = view.querySelector('#arrPanelTitle');
+            if (arrPanelTitle) {
+                arrPanelTitle.innerHTML = '<span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span> Add *arr Connection';
+            }
+            editingInstanceIndex = -1;
         });
     }
 
     if (btnTestArr) {
         btnTestArr.addEventListener('click', function () {
             var type = addType ? addType.value : 'Radarr';
-            var baseUrl = addBaseUrl ? addBaseUrl.value.trim() : '';
+
+            let baseUrl = document.querySelector('#addArrBaseUrl').value.replace(/\/+$/, '');
+            document.querySelector('#addArrBaseUrl').value = baseUrl;
+
             var apiKey = addApiKey ? addApiKey.value.trim() : '';
 
             if (!baseUrl || !apiKey) {
@@ -645,7 +700,10 @@ export default function (view) {
         btnSaveAdd.addEventListener('click', function () {
             var name = addName ? addName.value.trim() : '';
             var type = addType ? addType.value : 'Radarr';
-            var baseUrl = addBaseUrl ? addBaseUrl.value.trim() : '';
+
+            let baseUrl = document.querySelector('#addArrBaseUrl').value.replace(/\/+$/, '');
+            document.querySelector('#addArrBaseUrl').value = baseUrl;
+
             var apiKey = addApiKey ? addApiKey.value.trim() : '';
             var pathFrom = addPathFrom ? addPathFrom.value.trim() : '';
             var pathTo = addPathTo ? addPathTo.value.trim() : '';
@@ -661,7 +719,12 @@ export default function (view) {
 
             ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                 config.ArrInstances = config.ArrInstances || [];
-                config.ArrInstances.push({
+
+                var existingWebhookId = (editingInstanceIndex >= 0 && config.ArrInstances[editingInstanceIndex])
+                    ? config.ArrInstances[editingInstanceIndex].ProvisionedWebhookId
+                    : null;
+
+                var newConfig = {
                     Name: name,
                     ArrType: type,
                     BaseUrl: baseUrl,
@@ -669,12 +732,32 @@ export default function (view) {
                     PathFrom: pathFrom,
                     PathTo: pathTo,
                     AutoHealOn404: autoHeal,
-                    ProvisionedWebhookId: null
-                });
+                    ProvisionedWebhookId: existingWebhookId
+                };
+
+                if (editingInstanceIndex >= 0) {
+                    config.ArrInstances[editingInstanceIndex] = newConfig;
+                } else {
+                    config.ArrInstances.push(newConfig);
+                }
 
                 return ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
                     btnSaveAdd.disabled = false;
                     clearAddForm();
+                    if (btnSaveAdd) {
+                        var span = btnSaveAdd.querySelector('span');
+                        if (span) {
+                            span.textContent = 'Save Connection';
+                        } else {
+                            btnSaveAdd.textContent = 'Save Connection';
+                        }
+                    }
+                    var arrPanelTitle = view.querySelector('#arrPanelTitle');
+                    if (arrPanelTitle) {
+                        arrPanelTitle.innerHTML = '<span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span> Add *arr Connection';
+                    }
+                    editingInstanceIndex = -1;
+
                     if (addPanel) {
                         addPanel.style.display = 'none';
                     }
@@ -735,39 +818,41 @@ export default function (view) {
     }
 
     if (btnWipeArr) {
-        btnWipeArr.addEventListener('click', function () {
-            confirmDialog(
-                "This will remove Jellyfin's hooks from Radarr/Sonarr/Whisparr. Are you sure you want to proceed?",
-                "Wipe All *arr Webhooks"
-            ).then(function (confirmed) {
-                if (!confirmed) {
-                    return;
+        btnWipeArr.addEventListener('click', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            Dashboard.confirm("Are you sure?").then(async function (result) {
+                if (result) {
+                    btnWipeArr.disabled = true;
+                    Dashboard.showLoadingMsg();
+                    try {
+                        await ApiClient.fetch({
+                            url: ApiClient.getUrl('QuickStrm/Arr/WipeWebhooks'),
+                            type: 'POST',
+                            dataType: 'json',
+                            contentType: 'application/json'
+                        });
+                    } catch (err) {
+                        Dashboard.alert({ message: 'Error wiping webhooks: ' + extractErrorMessage(err) });
+                    }
+                    Dashboard.hideLoadingMsg();
+                    btnWipeArr.disabled = false;
+                    forceBadgesUnsynced();
+                    await loadConfig('Unsynced');
                 }
-
-                btnWipeArr.disabled = true;
-                showLoading();
-
-                apiPost('QuickStrm/Arr/WipeWebhooks')
-                    .then(function (results) {
-                        btnWipeArr.disabled = false;
-                        hideLoading();
-                        forceBadgesUnsynced();
-                        loadConfig('Unsynced');
-                    })
-                    .catch(function (err) {
-                        btnWipeArr.disabled = false;
-                        hideLoading();
-                        var errMsg = extractErrorMessage(err);
-                        showAlert('Error wiping webhooks: ' + errMsg);
-                        loadConfig();
-                    });
             });
         });
     }
 
     // 4. STRM Bulk URL Rewriter
     if (btnRunRewrite) {
-        btnRunRewrite.addEventListener('click', function () {
+        btnRunRewrite.addEventListener('click', function (event) {
+            if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+
             var oldPrefix = txtRewriteOldPrefix ? txtRewriteOldPrefix.value.trim() : '';
             var newPrefix = txtRewriteNewPrefix ? txtRewriteNewPrefix.value.trim() : '';
             var dryRun = chkRewriteDryRun ? chkRewriteDryRun.checked : true;
@@ -779,7 +864,7 @@ export default function (view) {
 
             var confirmPromise = dryRun
                 ? Promise.resolve(true)
-                : confirmDialog('Are you sure you want to execute this rewrite? This will modify matching .strm files on disk.', 'Confirm Rewrite');
+                : Dashboard.confirm('Are you sure you want to execute this rewrite? This will modify matching .strm files on disk.');
 
             confirmPromise.then(function (confirmed) {
                 if (!confirmed) {

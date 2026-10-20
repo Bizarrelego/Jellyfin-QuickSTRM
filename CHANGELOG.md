@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [2.0.0] - 2026-10-19
+## [2.0.0] - 2026-10-20
 
 ### 🚀 Major Platform Upgrade & Zero-Touch Orchestration Suite
 
@@ -21,18 +21,19 @@ Major release establishing QuickSTRM as a self-contained, zero-touch `.strm` orc
   - Integrated FFmpeg 8.1 media handling, preserving Intel QuickSync (QSV) hardware acceleration paths for H.264 video and AAC/AC3 audio on Fire TV Stick 4K and Astra streaming clients.
 - **Native Responsive Dashboard & Live Connection Testing**:
   - Built an elevated, responsive management dashboard embedded in the Jellyfin web UI with a custom Material Design `bolt` icon.
-  - Implemented non-mutating live connection testing (`POST /QuickStrm/Arr/TestConnection`) via a dedicated "Test Connection" button (`#btnTestArrConnection`) adjacent to the API Key field in the Add Connection panel.
-  - Added real-time DOM status badges (`Synced` in green, `Unsynced/Error` in red) reflecting the active synchronization state of each configured instance.
+  - Added full **Instance Edit Workflow**: Introduced `.btnEditInstance` for each configured instance, allowing administrators to modify credentials and paths in-place with smooth viewport scrolling and dynamic `"Update Connection"` / `"Save Connection"` mode switching.
+  - Implemented non-mutating live connection testing (`POST /QuickStrm/Arr/TestConnection`) via a dedicated "Test Connection" button (`#btnTestArrConnection`) that tests currently populated form inputs without persisting or registering webhooks.
+  - Added real-time DOM status badges (`Synced` in green, `Unsynced` in red) reflecting the active synchronization state of each configured instance.
   - Integrated real-time telemetry metrics: Circuit State, Cooldown Timer, Queue Depth (High/Low lanes), and Active Probes.
 - **Zero-Touch \*arr Suite Orchestration**:
   - Automated webhook provisioning and synchronization across Radarr, Sonarr, and Whisparr without external configuration files or host scripts.
   - Background exponential backoff retry loop (5 attempts: 10s, 20s, 40s, 80s, 160s) to handle container startup race conditions when Jellyfin boots before \*arr instances.
   - Synchronous manual override (`SyncSingleInstanceAsync` / `/QuickStrm/Arr/TestAndSync`) allowing instant manual re-syncing without UI locking.
-  - One-click zero-footprint webhook teardown (`POST /QuickStrm/Arr/WipeWebhooks`) to cleanly purge all QuickSTRM-registered notifications upon removal.
+  - One-click zero-footprint webhook teardown (`POST /QuickStrm/Arr/WipeWebhooks`) with native asynchronous `Dashboard.confirm` dialogs to cleanly purge all QuickSTRM-registered notifications upon removal.
 - **Autonomous "Auto-Heal on 404" Pipeline**:
   - Automatic dead link detection intercepting HTTP 404 errors and broken remote streams during playback or pre-flight checks.
   - Ancestor mount marker validation (e.g., `.mount_ok`) preventing catastrophic mass deletions if an upstream cloud mount (rclone, Google Drive, WebDAV) disconnects.
-  - Reverse path translation (`PathTo` &rarr; `PathFrom`) resolving local Jellyfin file paths to external \*arr paths.
+  - Reverse path translation (`PathTo` → `PathFrom`) resolving local Jellyfin file paths to external \*arr paths.
   - Automated deletion of dead file records via \*arr REST APIs paired with immediate automated replacement grab commands (`MoviesSearch`, `EpisodeSearch`, `SeriesSearch`).
 - **Low-Power Hardware Safeguards & Playback Acceleration**:
   - **Debounced SQLite I/O with 50ms Pacing**: Batches filesystem monitor updates and injects 50ms pacing between SQLite writes, eliminating write-lock contention (`database is locked`) during bulk season grabs on low-power hosts (e.g., Intel Core i3).
@@ -45,13 +46,17 @@ Major release establishing QuickSTRM as a self-contained, zero-touch `.strm` orc
 
 ### Changed
 - **Webhook Endpoint Signature & Routing**: Updated `POST /QuickStrm/ArrWebhook` to accept `[FromBody] ArrWebhookPayload? payload`.
-- **Immediate Payload Validation**: Replaced loose JSON parsing with immediate validation returning `400 Bad Request` if the payload or `EventType` is null or whitespace.
+- **Strict JSON Payload Validation**: Replaced loose JSON parsing with immediate validation returning `400 Bad Request` if the payload or `EventType` is null or whitespace.
 - **Switch-Based Path Extraction**: Implemented switch dispatch on `payload.EventType`, safely extracting file paths from `Movie.FilePath` (Radarr/Whisparr) or iterating `Episodes` checking `Path` and `SourcePath` (Sonarr).
 - **Graceful Unsupported Event Handling**: Unsupported or test event types (`Test`, `Grab`) cleanly return `200 OK` without enqueuing, ensuring \*arr test notifications succeed without triggering spurious errors.
 - **Refactored Session Monitoring**: Updated `SessionMonitorService` to consume Jellyfin 10.11/12.2 `PlaybackProgressEventArgs` event signatures and inject `IChapterManager` for chapter persistence.
+- **HTTP Client & Input Sanitization**:
+  - Hardened backend HTTP requests with `cleanBaseUrl = config.BaseUrl.TrimEnd('/')`, explicit `Accept: application/json` headers, and strict URL construction `${cleanBaseUrl}/api/v3/system/status`.
+  - Added frontend trailing slash sanitization (`baseUrl = value.replace(/\/+$/, '')`) reassigned directly to the DOM input before testing or saving.
+  - Eliminated custom modal fallbacks in favor of Jellyfin's native `Dashboard.confirm` promises with `event.preventDefault()` and `event.stopPropagation()`.
 
 ### Security
-- **Query String Security Token**: Secured incoming webhook endpoints (`/QuickStrm/ArrWebhook?token=...`) with an auto-generated per-installation cryptographic GUID (`WebhookSecret`), preventing unauthorized webhook injections.
+- **Query String Security Token**: Secured incoming webhook endpoints (`/QuickStrm/ArrWebhook?token={WebhookSecret}`) with an auto-generated per-installation cryptographic GUID, preventing unauthorized webhook injections.
 - **Role-Based Elevation Protection**: Enforced `[Authorize(Policy = "RequiresElevation")]` across all administrative endpoints, including `POST /QuickStrm/Arr/TestConnection`, `POST /QuickStrm/Arr/TestAndSync`, and `POST /QuickStrm/Arr/WipeWebhooks`.
 - **Isolated Non-Mutating Connection Testing**: `TestConnectionAsync` queries external \*arr status endpoints in memory without writing configuration to disk or triggering premature webhook registration.
 

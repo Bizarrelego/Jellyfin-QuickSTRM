@@ -9,31 +9,62 @@
 </p>
 
 <p align="center">
-  <strong>Zero-Touch .STRM Playback Acceleration, *arr Suite Orchestration, and Automated Auto-Healing Suite for Jellyfin 12.2.</strong>
+  <strong>Zero-Touch .STRM Orchestration Suite, Playback Acceleration, and Autonomous 404 Auto-Healing for Jellyfin 12.2.</strong>
 </p>
 
 ---
 
 ## ⚡ Overview & Core Pitch
 
-**QuickSTRM** is an enterprise-grade, zero-touch `.strm` management and playback acceleration suite built natively for **Jellyfin 12.2+** running on **.NET 10.0**. 
+**QuickSTRM** is a complete, zero-touch `.strm` orchestration suite and playback acceleration engine built natively for **Jellyfin 12.2+** running on **.NET 10.0**.
 
-Traditional `.strm` workflows require fragile host-level plumbing: external shell scripts (`jellyfin-notify.sh`), container entrypoint wrappers (`bypass-ffprobe.sh`), and manually registered webhooks. When remote links die or container stacks restart out of order, links break, clients freeze on indefinite loading spinners, and administrators are forced to debug shell scripts and Docker mounts manually.
+Traditional `.strm` setups rely on fragile external bash scripts (`jellyfin-notify.sh`), container entrypoint hacks (`bypass-ffprobe.sh`), and manually configured webhooks. When remote links die, cloud mounts disconnect, or container stacks restart asynchronously, streams freeze on indefinite loading spinners, SQLite databases lock up, and administrators are left troubleshooting shell scripts and Docker mounts manually.
 
-**QuickSTRM eliminates all external dependencies and host-level scripting.** It runs 100% self-contained inside the Jellyfin process:
+**QuickSTRM permanently replaces all external scripts and host-level wrappers with native, in-process automation:**
 
-* **Instant Sub-Second Playback**: Decorates Jellyfin's `IMediaSourceManager` in the dependency injection container, skipping remote `ffprobe` network round-trips for already-probed `.strm` media.
-* **Zero-Touch \*arr Suite Orchestration**: Automatically discovers, provisions, and configures authenticated webhooks inside **Radarr**, **Sonarr**, and **Whisparr** and cleanly tears them down with a single click upon removal.
-* **Autonomous 404 Auto-Healing**: Deterministically detects dead or removed cloud streams, reverse-translates paths to the corresponding \*arr instance, deletes the dead file record, and immediately fires automated searches across Usenet and Torrent indexers for a working replacement.
-* **Next-Episode Pre-Warming**: Predictively resolves the next sequential episode in the High Priority lane during playback so continuous binge-watching on streaming clients (Fire TV Stick 4K, Astra, Apple TV) starts instantaneously with zero client buffer stalls.
-* **Low-Power Hardware Safeguards**: Engineered specifically to protect resource-constrained host servers (e.g., dual/quad-core Intel Core i3 systems, NAS appliances) from SQLite database write-locks and CPU starvation.
+* 🚀 **Instant Sub-Second Playback**: Decorates Jellyfin's `IMediaSourceManager` in the dependency injection container, bypassing remote `ffprobe` operations for already-probed `.strm` media.
+* 🤖 **Zero-Touch \*arr Suite Orchestration**: Automatically provisions, synchronizes, and configures authenticated webhooks inside **Radarr**, **Sonarr**, and **Whisparr**—and cleans them up with a single click upon removal.
+* 🩺 **Autonomous 404 Auto-Healing**: Deterministically intercepts broken or removed cloud links during playback or pre-flight checks, reverse-translates paths to the corresponding \*arr instance, deletes the dead file record, and triggers an immediate automated replacement grab.
+* 📺 **Next-Episode Pre-Warming**: Predictively resolves the next sequential episode in the High Priority lane upon playback start, eliminating buffer stalls on streaming devices (Fire TV Stick 4K, Astra, Apple TV) during continuous binge-watching.
+* 🛡️ **Hardware-Tailored Safeguards**: Specifically engineered for resource-constrained host servers (e.g., dual/quad-core Intel Core i3 systems, low-power NAS devices) to prevent SQLite write-lock contention and CPU thread starvation.
 
 ---
 
-## 🎯 Architecture & Playback Pipeline
+## 🛠️ Hardware Optimizations (Low-Power Hosts & Streaming Clients)
+
+QuickSTRM is meticulously tailored for hardware-constrained host environments (such as an **Intel Core i3** server, Celeron/N-series NAS, or mini-PC) delivering direct-play streams to budget client devices (like an **Amazon Fire TV Stick 4K** running the **Astra** client). These optimizations ensure buttery-smooth playback with zero host lockups:
+
+### 1. Debounced SQLite Write-Lock Pacing (50ms Inter-Write Delay)
+When Sonarr or Radarr grabs a multi-season series or bulk release, external webhooks can flood Jellyfin with dozens of simultaneous notifications. Calling `ILibraryMonitor.ReportFileSystemChanged` concurrently for each file hammers SQLite, generating `database is locked` exceptions and stalling active streams.
+* **Concurrent Hash Set Collection**: Incoming webhook notifications are deduplicated in memory.
+* **3-Second Stabilization Debounce Window**: Rapid-fire file events are held until disk activity settles.
+* **50ms Inter-Write Pacing**: When committing batches to SQLite, QuickSTRM injects a dedicated 50ms delay between every `ReportFileSystemChanged` dispatch. This allows the host CPU (e.g., Intel Core i3) and SQLite engine to finalize write transactions cleanly without choking active direct-play streams.
+
+### 2. Deferred Virtual Chapter Synthesis (Playback-Safe)
+Generating virtual 5-minute chapter markers on `.strm` media enables users to seek and skip effortlessly without heavy chapter extraction. However, executing `Item.SaveChapters()` during stream initialization locks the SQLite database at the exact millisecond a Fire TV Stick 4K or Astra client requests initial media chunks—causing playback stutter, buffering loops, or timeout errors.
+* **Deferred Execution**: QuickSTRM decouples chapter synthesis from initial playback and defers it until the `PlaybackStopped` session event fires.
+* **Zero Disk Contention**: Database and disk I/O remain completely idle during stream startup, ensuring butter-smooth playback initiation on Astra and Fire TV Stick 4K endpoints.
+
+### 3. FFmpeg 8.1 & Intel QuickSync (QSV) Direct Mapping
+Jellyfin 12.2 integrates FFmpeg 8.1. QuickSTRM preserves native hardware acceleration pathways (Intel QuickSync Video), prioritizing direct stream copy and hardware transcoding to H.264 video and AAC/AC3 audio for optimal compatibility on Fire TV Stick 4K devices.
+
+### 4. Global 2-Slot Concurrency Gate & Dual-Lane Queue
+QuickSTRM enforces a server-wide execution gate capped at **exactly 2 concurrent `ffprobe` operations**:
+* **High Priority Lane**: Playback start and incoming \*arr webhook events bypass background work for instant resolution.
+* **Low Priority Lane**: Library-wide batch pre-probes and routine maintenance run in the background without starving host CPU threads.
+
+### 5. Circuit Breaker with Mount Guard (`.mount_ok`)
+If an upstream cloud mount (Rclone, Google Drive, WebDAV) drops, probing hundreds of missing files will trigger false deletions and hammer dead remotes.
+* **Mount Marker Verification**: Scans up to 5 parent directories for a designated marker file (e.g., `.mount_ok`). If missing, deletions are immediately suppressed.
+* **Exponential Backoff**: After consecutive probe failures, the circuit breaker trips into an `Open` state (`10 * 2^(n-1)` seconds backoff) to protect system resources.
+* **Half-Open Probe Trial**: Once cooldown expires, a single trial probe is allowed through to confirm mount recovery before resuming full queue processing.
+
+---
+
+## 🎯 Architecture & Playback Flow
 
 ```text
-[ Client Playback Request (e.g. Fire TV Stick 4K / Astra Client) ]
+[ Client Playback Request (e.g., Fire TV Stick 4K / Astra Client) ]
                                │
                                ▼
              [ QuickSTRM MediaSourceInterceptor ]
@@ -52,41 +83,6 @@ Check Stream Info in Database                          100% Synchronous Passthro
                   │                 └── Dispatch Background Persistence (Async DB Save)
                   └── Timeout / Failure ──▶ Fallback to Raw URL ──▶ Playback Starts
 ```
-
-1. **Non-`.strm` Media**: 100% synchronous passthrough with zero state-machine or memory allocation overhead.
-2. **Pre-Probed `.strm` Media**: Sets `allowMediaProbe = false`, completely bypassing remote `ffprobe` operations for **instant, sub-second playback start**.
-3. **Unprobed First-Play `.strm` Media**: Executes a lightweight in-memory probe bounded by a strict 5-second hard cap. Codec profiles, levels, container formats, and bitrates are populated directly in memory so playback begins immediately, while persistent metadata updates are scheduled in the background.
-
----
-
-## 🛠️ Hardware Optimizations (Low-Power Servers & Streaming Clients)
-
-QuickSTRM is engineered specifically for hardware-constrained host servers (such as Intel Core i3 machines, Celeron/N-series NAS devices, or low-power mini-PCs) streaming to budget client hardware (like **Amazon Fire TV Stick 4K**, **Fire TV Cube**, or Android TV devices running the **Astra** client). These safeguards ensure Jellyfin remains responsive without locking the database or stuttering active playback:
-
-### 1. Debounced SQLite I/O with 50ms Pacing
-When Sonarr or Radarr grabs a full season or bulk release, external webhooks can flood Jellyfin with dozens of simultaneous notifications. Firing `ILibraryMonitor.ReportFileSystemChanged` synchronously for each item hammers the SQLite database, causing `database is locked` exceptions and interface freezes.
-* **Thread-Safe Concurrent Hash Set**: Incoming webhook file paths are atomically collected and deduplicated in memory.
-* **Background Stabilization Debounce Window**: File system notifications are held for a 3-second stabilization window.
-* **50ms Inter-Write Pacing**: When flushing batches to SQLite, QuickSTRM injects a dedicated 50ms delay between every `ReportFileSystemChanged` dispatch. This gives the SQLite engine time to commit transactions without blocking active media streams.
-
-### 2. Deferred Virtual Chapter Synthesis (Playback-Safe)
-Generating virtual 5-minute chapters on `.strm` media allows users to jump around files easily without heavy chapter extraction. However, executing `Item.SaveChapters()` during stream initialization locks the SQLite database at the exact millisecond a Fire TV Stick 4K or Astra player is requesting initial video chunks—causing playback stutter or timeout errors.
-* **Deferred Synthesis**: Virtual chapter generation is decoupled from the playback path and deferred until the `PlaybackStopped` session event fires.
-* **Zero-Interference Streaming**: Disk I/O remains completely idle during the critical playback start phase.
-
-### 3. FFmpeg 8.1 & Intel QuickSync (QSV) Direct Mapping
-Jellyfin 12.2 integrates FFmpeg 8.1. QuickSTRM ensures stream mapping directly honors hardware acceleration pathways (Intel QuickSync Video), prioritizing direct stream copy and hardware transcoding to H.264 video and AAC/AC3 audio for butter-smooth playback on Fire TV Stick 4K and Astra clients.
-
-### 4. 2-Slot Global Concurrency Gate & Dual-Lane Queue
-QuickSTRM enforces a server-wide execution semaphore capped at **exactly 2 concurrent `ffprobe` slots**:
-* **High Priority Lane**: Playback start and incoming \*arr webhooks bypass background queues for instant resolution.
-* **Low Priority Lane**: Library-wide batch pre-probes and routine maintenance run in the background without starving active streams.
-
-### 5. Circuit Breaker with Exponential Backoff Mount Protection
-If an upstream cloud mount (Rclone, Google Drive, WebDAV, Debrid mount) drops offline, probing hundreds of missing files will trigger false-positive deletions and hammer dead remotes.
-* **Mount Marker Verification**: Traverses up to 5 parent directories looking for a designated marker file (e.g., `.mount_ok`). If missing, deletions are immediately suppressed.
-* **Exponential Backoff**: After consecutive probe failures, the circuit breaker trips into an `Open` state (`10 * 2^(n-1)` seconds backoff) to protect system resources.
-* **Half-Open Probe Trial**: Once cooldown expires, a single trial probe is allowed through to confirm mount recovery before resuming full queue processing.
 
 ---
 
@@ -116,24 +112,24 @@ QuickSTRM bridges Jellyfin and your \*arr media managers into a closed-loop, sel
      [ Usenet / Torrent Grabbers Fetch Working Stream ]
 ```
 
-1. **Deterministic 404 Detection**: When a `.strm` pre-flight check returns an HTTP 404 or persistent unresolvable state, QuickSTRM initiates the auto-heal workflow.
-2. **Mount Protection Gate**: QuickSTRM verifies that the cloud mount itself is active (via folder contents or `.mount_ok` marker), preventing mass deletions caused by unmounted rclone drives.
-3. **Reverse Path Translation**: QuickSTRM matches the local Jellyfin filesystem path to the corresponding instance configuration (`PathTo` &rarr; `PathFrom`) to resolve the exact internal path recognized by Radarr/Sonarr.
-4. **File Record Deletion**: QuickSTRM calls the \*arr REST API to delete the dead movie or episode file record from the database.
-5. **Automated Search Trigger**: Immediately dispatches an authenticated search command (`MoviesSearch`, `EpisodeSearch`, or `SeriesSearch`) through the \*arr API. Your connected download clients (Usenet via SABnzbd/NZBGet, or Torrents via qBittorrent/Transmission) automatically grab an alternative release and replace the dead link without any user intervention.
+1. **Deterministic 404 Detection**: When a `.strm` pre-flight check returns an HTTP 404, QuickSTRM initiates the auto-heal workflow.
+2. **Mount Protection Gate**: QuickSTRM verifies that the cloud mount is healthy (via folder contents or `.mount_ok` marker), preventing mass deletions caused by dropped rclone mounts.
+3. **Reverse Path Translation**: QuickSTRM translates the local Jellyfin filesystem path to the remote scheme (`PathTo` &rarr; `PathFrom`) recognized by Radarr/Sonarr.
+4. **File Record Deletion**: QuickSTRM calls the \*arr REST API to remove the dead movie or episode file record.
+5. **Automated Search Trigger**: Immediately dispatches an authenticated search command (`MoviesSearch`, `EpisodeSearch`, or `SeriesSearch`). Connected download clients automatically grab a working release without user intervention.
 
 ---
 
 ## 📺 Next-Episode Pre-Warming
 
-When binge-watching a series on hardware-constrained streaming devices like the **Amazon Fire TV Stick 4K**, **Fire TV Cube**, or **Android TV** running apps such as **Astra** or the native Jellyfin client, the transition between episodes is often plagued by 5–15 second buffering stalls or timeout crashes while the device waits for remote ffprobe resolution.
+When binge-watching on streaming hardware like the **Amazon Fire TV Stick 4K** running the **Astra** client, transitioning between episodes often introduces 5–15 second buffering stalls while the device resolves remote stream info.
 
-QuickSTRM eliminates this bottleneck with **Next-Episode Pre-Warming**:
-1. When playback begins on any television episode, QuickSTRM's `SessionMonitorService` intercepts the `PlaybackStart` event.
-2. It dynamically identifies the current episode's index, queries the season hierarchy, and locates the next sequential episode.
-3. If the next episode is a `.strm` file missing stream info, QuickSTRM immediately injects it into the **High Priority Probe Lane**.
+QuickSTRM eliminates this bottleneck:
+1. When playback begins on an episode, `SessionMonitorService` catches the `PlaybackStart` event.
+2. It queries the season hierarchy and identifies the next sequential episode.
+3. If the next episode is a `.strm` file missing stream info, it is immediately enqueued in the **High Priority Probe Lane**.
 4. By the time the current episode finishes, the subsequent episode's container, audio/video streams, and runtime ticks are already persisted in the database.
-5. Autoplay transitions occur **instantaneously**, providing a smooth, Netflix-like binge-watching experience on budget client devices.
+5. Autoplay transitions occur **instantaneously** with zero client buffer stalls.
 
 ---
 
@@ -143,25 +139,27 @@ QuickSTRM integrates directly into the native Jellyfin administrator dashboard a
 
 ### 1-Click Zero-Touch Setup
 
-1. Open your Jellyfin Web Client and click the **QuickSTRM** tab in the native sidebar navigation menu (or navigate to **Dashboard -> QuickSTRM**).
+1. Open your Jellyfin Web Client and click the **QuickSTRM** tab in the sidebar navigation menu (or navigate to **Dashboard -> QuickSTRM**).
 2. Under **Zero-Touch \*arr Suite Integration**, click **+ Add Instance**.
 3. Fill in your instance details:
-   * **Instance Name**: e.g., `Radarr 4K` or `Sonarr HD`
+   * **Instance Name**: e.g., `Radarr 4K` or `Sonarr TV`
    * **Application Type**: Select `Radarr`, `Sonarr`, or `Whisparr`
-   * **Base URL**: e.g., `http://192.168.1.50:7878` or `http://sonarr:8989`
+   * **Base URL**: e.g., `http://192.168.1.50:7878` or `http://sonarr:8989` (trailing slashes are automatically sanitized)
    * **API Key**: Found in your \*arr instance under *Settings -> General -> Security*
-   * **Remote Path (\*arr)**: e.g., `/movies` or `/data/media/tv` (leave blank if identical to Jellyfin)
-   * **Local Path (Jellyfin)**: e.g., `/media/movies` or `/mnt/cloud/tv` (leave blank if identical to \*arr)
-   * **Auto-Heal on 404**: Checked by default to enable automatic dead link replacements.
+   * **Remote Path (\*arr)** & **Local Path (Jellyfin)**: Leave blank if your \*arr container and Jellyfin container share the exact same volume mounts.
+   * **Auto-Heal on 404**: Checked by default to enable automatic dead link replacement.
 4. Click **Test Connection** adjacent to the API Key field to perform an immediate, non-mutating live connectivity check against the \*arr API.
-5. Click **Save Connection**. QuickSTRM will automatically save the configuration, connect to the instance, and provision the secured webhook notification named `QuickSTRM Auto-Sync` with an auto-generated cryptographic security query token (`?token={WebhookSecret}`).
+5. Click **Save Connection**. QuickSTRM will automatically save the configuration, connect to the instance, and provision a secured webhook notification named `QuickSTRM Auto-Sync` with an auto-generated cryptographic security query token (`?token={WebhookSecret}`).
 6. The instance will display an active **Synced** status badge in green.
 
+### Editing Existing Connections
+Click the **Edit** button on any configured instance card to load its parameters into the form, make changes, and click **Update Connection** to commit updates in-place.
+
 ### Resilient Startup Retry Policy
-If Jellyfin boots faster than your Radarr or Sonarr containers (common in Docker Compose environments or after Watchtower updates), QuickSTRM executes a 5-attempt background retry loop with exponential backoff (`10s`, `20s`, `40s`, `80s`, `160s`) until your \*arr instances are reachable.
+If Jellyfin boots faster than your Radarr or Sonarr containers (common in Docker Compose environments), QuickSTRM runs a 5-attempt background retry loop with exponential backoff (`10s`, `20s`, `40s`, `80s`, `160s`) until your \*arr instances are reachable.
 
 ### Clean Zero-Footprint Uninstall
-Click **Wipe All \*arr Webhooks** at any time to cleanly scrub all QuickSTRM-managed webhooks from Radarr, Sonarr, and Whisparr with a single confirmation.
+Click **Wipe All \*arr Webhooks** at any time to cleanly scrub all QuickSTRM-managed webhooks from Radarr, Sonarr, and Whisparr with a single confirmation modal.
 
 ---
 
@@ -177,7 +175,7 @@ Click **Wipe All \*arr Webhooks** at any time to cleanly scrub all QuickSTRM-man
    ```
 4. Click **Save**.
 5. Switch to the **Catalog** tab under Plugins. Locate **QuickSTRM** and click **Install**.
-6. Restart your Jellyfin server. Future updates will now be flagged and installed automatically through the Jellyfin UI!
+6. Restart your Jellyfin server. Future updates will be flagged and installed automatically through the Jellyfin UI!
 
 ---
 
