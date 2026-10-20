@@ -12,8 +12,8 @@
         "changelog": "QuickSTRM v3.0.0 Native Telemetry & Predictive Pre-Warming Suite:\n- Predictive VFS pre-warming middleware (5MB header reads) bypassing InfiniDysk spin-up latency.\n- Proactive dead link sweeper (daily 3:00 AM scheduled task) with paced 404 auto-healing.\n- Absolute URL pre-resolution bypassing redirect hops on Fire TV / Astra clients.\n- Hardened 8-second FFprobe killswitch preventing client UI infinite-spinning.\n- Native Action Ledger UI and IActivityManager telemetry integration.\n- Automated trickplay database lock prevention and debounced SQLite write-locking.",
         "targetAbi": "12.2.0.0",
         "sourceUrl": "https://github.com/Bizarrelego/Jellyfin-QuickSTRM/releases/download/latest/QuickSTRM.zip",
-        "checksum": "52C3CC5BB2609A51C5435DBAB57C9E3A",
-        "timestamp": "2026-10-20T06:28:52Z"
+        "checksum": "0F800590B3DF59A4F03B6AD259FA6069",
+        "timestamp": "2026-10-20T23:47:50Z"
       },
       {
         "version": "2.0.0",
