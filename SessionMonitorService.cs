@@ -217,7 +217,11 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
 
         if (chapters.Count > 0)
         {
-            _chapterManager.SaveChapters(item.Id, chapters);
+            if (item is MediaBrowser.Controller.Entities.Video videoItem)
+            {
+                _chapterManager.SaveChapters(videoItem, chapters);
+            }
+
             _logger.LogInformation(
                 "QuickSTRM: Deferred synthesis generated {Count} virtual chapters for {Name} following playback completion",
                 chapters.Count,
