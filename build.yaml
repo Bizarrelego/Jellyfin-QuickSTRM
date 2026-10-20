@@ -1,7 +1,7 @@
 ---
 name: "QuickSTRM"
 guid: "1278dbd6-8399-46c0-8e64-31f2d9e022ae"
-version: "2.0.0"
+version: "3.0.0"
 targetAbi: "12.2.0.0"
 framework: "net10.0"
 overview: "Zero-touch .strm playback acceleration, *arr orchestration, and auto-healing suite"

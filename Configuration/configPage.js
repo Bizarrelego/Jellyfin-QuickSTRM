@@ -1,4 +1,6 @@
 let editingInstanceIndex = -1;
+let queuePollInterval = null;
+let probeTotalCount = 0;
 
 export default function (view) {
     'use strict';
@@ -39,7 +41,7 @@ export default function (view) {
     var addPathFrom = view.querySelector('#addArrPathFrom');
     var addPathTo = view.querySelector('#addArrPathTo');
     var addAutoHeal = view.querySelector('#addArrAutoHeal');
-    var btnSaveAdd = view.querySelector('#btnSaveArrInstance');
+    var btnSaveAdd = view.querySelector('#btnSaveArrConnection') || view.querySelector('#btnSaveArrInstance');
     var btnCancelAdd = view.querySelector('#btnCancelArrInstance');
     var btnTestArr = view.querySelector('#btnTestArrConnection');
 
@@ -60,9 +62,12 @@ export default function (view) {
     var btnStart = view.querySelector('#btnStartProbe');
     var btnStop = view.querySelector('#btnStopProbe');
     var btnResetFailureCache = view.querySelector('#btnResetFailureCache');
-    var lblStatus = view.querySelector('#lblTaskStatus');
-    var progressBar = view.querySelector('#probeProgressBar');
+    var lblStatus = view.querySelector('#probeStatusText') || view.querySelector('#lblTaskStatus');
+    var progressBar = view.querySelector('#probeProgressBar') || view.querySelector('.taskProgressInner');
+    var probeItemText = view.querySelector('#probeItemText');
     var lblCurrentItem = view.querySelector('#lblCurrentItem');
+    var recentActionsList = view.querySelector('#recentActionsList');
+    var btnRefreshLedger = view.querySelector('#btnRefreshLedger');
 
     var pollTimer = null;
     var queuePollTimer = null;
@@ -282,13 +287,58 @@ export default function (view) {
         });
     }
 
-    function loadQueue() {
-        apiGet('QuickStrm/Queue').then(function (data) {
-            var waiting = data.Waiting || 0;
-            var running = data.Running || 0;
-            var high = data.HighPriorityWaiting || 0;
-            var low = data.LowPriorityWaiting || 0;
+    function loadLedger() {
+        if (!recentActionsList) { return; }
+        var ledgerUrl = (typeof ApiClient.getUrl === 'function') ? ApiClient.getUrl('QuickStrm/Ledger') : 'QuickStrm/Ledger';
+        var fetchPromise = (typeof ApiClient.getJSON === 'function')
+            ? ApiClient.getJSON(ledgerUrl)
+            : apiGet('QuickStrm/Ledger');
 
+        fetchPromise.then(function (entries) {
+            if (!Array.isArray(entries) && entries && Array.isArray(entries.Entries)) {
+                entries = entries.Entries;
+            }
+            if (!Array.isArray(entries) || entries.length === 0) {
+                recentActionsList.innerHTML = '<div style="color: var(--text-muted-color, #777); font-style: italic;">No recent actions logged.</div>';
+                return;
+            }
+            var html = '';
+            var reversed = entries.slice().reverse();
+            for (var i = 0; i < reversed.length; i++) {
+                var entry = reversed[i];
+                var color = 'var(--text-color, #ddd)';
+                if (entry.indexOf('STRM Auto-Heal') !== -1 || entry.indexOf('Auto-Heal') !== -1) {
+                    color = '#ffb74d';
+                } else if (entry.indexOf('Tripped') !== -1) {
+                    color = '#e57373';
+                } else if (entry.indexOf('Reset') !== -1) {
+                    color = '#81c784';
+                }
+                html += '<div style="padding: 0.35em 0; border-bottom: 1px solid rgba(255,255,255,0.06); color: ' + color + '; word-break: break-all;">' + escapeHtml(entry) + '</div>';
+            }
+            recentActionsList.innerHTML = html;
+        }).catch(function (err) {
+            recentActionsList.innerHTML = '<div style="color: #e53935;">Failed to load recent actions: ' + escapeHtml(extractErrorMessage(err)) + '</div>';
+        });
+    }
+
+    function pollQueueStatus() {
+        var queueUrl = (typeof ApiClient.getUrl === 'function') ? ApiClient.getUrl('QuickStrm/Queue') : 'QuickStrm/Queue';
+        var fetchPromise = (typeof ApiClient.getJSON === 'function')
+            ? ApiClient.getJSON(queueUrl)
+            : apiGet('QuickStrm/Queue');
+
+        return fetchPromise.then(function (data) {
+            if (!data) {
+                return;
+            }
+
+            var low = typeof data.LowPriorityWaiting === 'number' ? data.LowPriorityWaiting : 0;
+            var high = typeof data.HighPriorityWaiting === 'number' ? data.HighPriorityWaiting : 0;
+            var running = typeof data.Running === 'number' ? data.Running : 0;
+            var waiting = typeof data.Waiting === 'number' ? data.Waiting : (low + high);
+
+            // Map metrics to DOM
             if (lblQueue) { lblQueue.textContent = waiting + running; }
             if (lblQueueDetail) { lblQueueDetail.textContent = waiting + ' waiting / ' + running + ' running'; }
 
@@ -309,11 +359,91 @@ export default function (view) {
 
             circuitState = data.CircuitState || (data.CircuitTripped ? 'Open' : 'Closed');
             cooldownEndsAt = Date.now() + (data.CooldownSecondsRemaining || 0) * 1000;
-
             renderCircuit();
-            startCountdown();
-            startQueuePolling();
+
+            // Evaluate if LowPriorityWaiting === 0 and Running === 0
+            if (low === 0 && running === 0) {
+                if (lblStatus) {
+                    lblStatus.textContent = 'Status: Idle';
+                }
+                if (lblCurrentItem) {
+                    lblCurrentItem.textContent = '-';
+                } else if (probeItemText) {
+                    probeItemText.textContent = 'Probing: -';
+                }
+
+                if (progressBar) {
+                    progressBar.classList.remove('indeterminate');
+                    progressBar.style.width = '0%';
+                }
+
+                probeTotalCount = 0;
+
+                if (btnStart) {
+                    btnStart.style.display = 'inline-flex';
+                    btnStart.disabled = false;
+                }
+                if (btnStop) {
+                    btnStop.style.display = 'none';
+                }
+
+                if (queuePollInterval) {
+                    clearInterval(queuePollInterval);
+                    queuePollInterval = null;
+                }
+
+                loadSummary();
+                return;
+            }
+
+            // Probe is running or queued
+            if (btnStart) {
+                btnStart.style.display = 'none';
+            }
+            if (btnStop) {
+                btnStop.style.display = 'inline-flex';
+            }
+
+            // If a total count was captured at the start of the probe, calculate the completion percentage.
+            // Otherwise, implement an indeterminate CSS animation on .taskProgressInner while Running > 0.
+            if (probeTotalCount > 0) {
+                if (progressBar) {
+                    progressBar.classList.remove('indeterminate');
+                    var remaining = low + running;
+                    var processed = Math.max(0, probeTotalCount - remaining);
+                    var pct = Math.min(100, Math.round((processed / probeTotalCount) * 100));
+                    progressBar.style.width = pct + '%';
+                    if (lblStatus) {
+                        lblStatus.textContent = 'Status: Running (' + pct + '%)';
+                    }
+                }
+            } else if (running > 0) {
+                if (progressBar) {
+                    progressBar.classList.add('indeterminate');
+                }
+                if (lblStatus) {
+                    lblStatus.textContent = 'Status: Running';
+                }
+            } else {
+                if (progressBar) {
+                    progressBar.classList.remove('indeterminate');
+                    progressBar.style.width = '0%';
+                }
+                if (lblStatus) {
+                    lblStatus.textContent = 'Status: Waiting';
+                }
+            }
+
+            if (lblCurrentItem) {
+                lblCurrentItem.textContent = data.CurrentItem || (running > 0 ? (running + ' active probe(s)') : '-');
+            }
+        }).catch(function (err) {
+            console.error('Error in pollQueueStatus:', err);
         });
+    }
+
+    function loadQueue() {
+        return pollQueueStatus();
     }
 
     function loadStatus() {
@@ -366,7 +496,7 @@ export default function (view) {
 
             var pathMapping = (inst.PathFrom || '(none)') + ' &rarr; ' + (inst.PathTo || '(none)');
 
-            html += '<div class="quickstrm-arr-card" data-index="' + index + '">' +
+            html += '<div class="quickstrm-arr-card paperList" data-index="' + index + '">' +
                 '<div style="flex: 1; min-width: 260px;">' +
                     '<div style="display: flex; align-items: center; flex-wrap: wrap; gap: 0.4em; margin-bottom: 0.35em;">' +
                         '<span style="font-weight: 600; font-size: 1.05em; color: var(--text-color, #fff);">' + escapeHtml(inst.Name || 'Unnamed') + '</span>' +
@@ -761,11 +891,19 @@ export default function (view) {
                     if (addPanel) {
                         addPanel.style.display = 'none';
                     }
+
+                    // Chain sequential API call to POST /QuickStrm/Arr/TestAndSync
                     return apiPost('QuickStrm/Arr/TestAndSync');
                 });
-            }).then(function () {
-                hideLoading();
-                loadConfig();
+            }).then(function (syncResults) {
+                // Only call renderArrInstances and hide loading after sync endpoint returns
+                return ApiClient.getPluginConfiguration(pluginId).then(function (freshConfig) {
+                    renderArrInstances(freshConfig.ArrInstances || []);
+                    if (Array.isArray(syncResults)) {
+                        updateBadgesFromResults(syncResults);
+                    }
+                    hideLoading();
+                });
             }).catch(function (err) {
                 btnSaveAdd.disabled = false;
                 hideLoading();
@@ -915,15 +1053,41 @@ export default function (view) {
     // 5. Manual Pre-probe & Cache Controls
     if (btnStart) {
         btnStart.addEventListener('click', function () {
-            apiPost('QuickStrm/Probe/Start?mode=' + (selectMode ? selectMode.value : 'Incremental')).then(function () {
-                loadStatus();
-            });
+            var mode = selectMode ? selectMode.value : 'Incremental';
+            btnStart.disabled = true;
+
+            apiPost('QuickStrm/Probe/Start?mode=' + encodeURIComponent(mode), { Scope: mode, Mode: mode })
+                .then(function (result) {
+                    var enqueued = (result && (typeof result.Enqueued === 'number' ? result.Enqueued : result.enqueued)) || 0;
+                    probeTotalCount = enqueued;
+
+                    if (queuePollInterval) {
+                        clearInterval(queuePollInterval);
+                        queuePollInterval = null;
+                    }
+
+                    // Start the polling interval at 2000ms immediately after the POST request resolves
+                    pollQueueStatus();
+                    queuePollInterval = setInterval(pollQueueStatus, 2000);
+
+                    var msg = (result && (result.Message || result.message)) || ('Pre-probe task started (' + mode + ').');
+                    Dashboard.alert({ message: msg });
+                })
+                .catch(function (err) {
+                    btnStart.disabled = false;
+                    Dashboard.alert({ message: 'Failed to start probe: ' + extractErrorMessage(err) });
+                });
         });
     }
 
     if (btnStop) {
         btnStop.addEventListener('click', function () {
             apiPost('QuickStrm/Probe/Stop').then(function () {
+                if (queuePollInterval) {
+                    clearInterval(queuePollInterval);
+                    queuePollInterval = null;
+                }
+                pollQueueStatus();
                 loadStatus();
             });
         });
@@ -941,6 +1105,12 @@ export default function (view) {
         });
     }
 
+    if (btnRefreshLedger) {
+        btnRefreshLedger.addEventListener('click', function () {
+            loadLedger();
+        });
+    }
+
     // ── Page Lifecycle ──
 
     view.addEventListener('viewshow', function () {
@@ -948,9 +1118,14 @@ export default function (view) {
         loadStatus();
         loadQueue();
         loadConfig();
+        loadLedger();
     });
 
     view.addEventListener('viewhide', function () {
+        if (queuePollInterval) {
+            clearInterval(queuePollInterval);
+            queuePollInterval = null;
+        }
         stopPolling();
         stopQueuePolling();
         stopCountdown();

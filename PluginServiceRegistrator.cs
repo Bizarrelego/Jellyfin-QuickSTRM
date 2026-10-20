@@ -2,9 +2,12 @@ using System.Linq;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Plugins;
+using MediaBrowser.Model.Tasks;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using QuickSTRM.ScheduledTasks;
 
 namespace QuickSTRM;
 
@@ -18,6 +21,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        // Register TelemetryService as singleton for native activity logging and action ledger
+        serviceCollection.AddSingleton<TelemetryService>();
+
         // Register ProbeService as singleton + hosted service for ItemAdded event and queue lifecycle
         serviceCollection.AddSingleton<ProbeService>();
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ProbeService>());
@@ -35,6 +41,18 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // Register SessionMonitorService as singleton + hosted service for next-episode pre-warming
         serviceCollection.AddSingleton<SessionMonitorService>();
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SessionMonitorService>());
+
+        // Register VfsPrewarmService as singleton
+        serviceCollection.AddSingleton<VfsPrewarmService>();
+
+        // Register PredictivePrewarmMiddleware as transient
+        serviceCollection.AddTransient<PredictivePrewarmMiddleware>();
+
+        // Register IStartupFilter to insert middleware before MVC routing endpoints
+        serviceCollection.AddTransient<IStartupFilter, PredictivePrewarmStartupFilter>();
+
+        // Register ProactiveSweeperTask as transient IScheduledTask so Jellyfin's task engine picks it up on startup
+        serviceCollection.AddTransient<IScheduledTask, ProactiveSweeperTask>();
 
         // Decorate IMediaSourceManager with our interceptor
         var descriptor = serviceCollection.FirstOrDefault(d => d.ServiceType == typeof(IMediaSourceManager));

@@ -102,6 +102,36 @@
                 margin-bottom: 1em;
             }
 
+            @keyframes quickstrm-indeterminate {
+                0% {
+                    transform: translateX(-100%);
+                    width: 30%;
+                }
+                50% {
+                    transform: translateX(100%);
+                    width: 60%;
+                }
+                100% {
+                    transform: translateX(350%);
+                    width: 30%;
+                }
+            }
+
+            .taskProgress {
+                position: relative;
+                overflow: hidden;
+            }
+
+            .taskProgressInner {
+                transition: width 0.25s ease;
+                transform: none;
+            }
+
+            .taskProgressInner.indeterminate {
+                width: 30% !important;
+                animation: quickstrm-indeterminate 1.5s infinite linear;
+            }
+
             @media (max-width: 720px) {
                 .quickstrm-metrics-grid {
                     grid-template-columns: 1fr;
@@ -113,6 +143,16 @@
                 .quickstrm-form-row {
                     grid-template-columns: 1fr;
                     gap: 0.8em;
+                }
+                .paperList {
+                    margin-left: 0 !important;
+                    margin-right: 0 !important;
+                    padding: 1em !important;
+                }
+                .paperList button,
+                .paperList .emby-button {
+                    width: 100%;
+                    box-sizing: border-box;
                 }
             }
         </style>
@@ -256,12 +296,12 @@
             </div>
 
             <!-- List of Configured Instances -->
-            <div id="arrInstancesList">
+            <div id="arrInstancesList" class="paperList" style="padding: 1.2em; margin-bottom: 1.2em; border-radius: 8px;">
                 <div style="color: var(--text-muted-color, #777); font-size: 0.9em; padding: 1em 0;">No *arr instances configured. Click "+ Add Instance" above to connect.</div>
             </div>
 
             <!-- Add/Edit Instance Panel (collapsible) -->
-            <div id="arrAddInstancePanel" style="display: none; padding: 1.2em; margin-top: 1.2em; border: 1px dashed var(--line-color, rgba(255, 255, 255, 0.2)); border-radius: 8px;">
+            <div id="arrAddInstancePanel" class="paperList" style="display: none; padding: 1.5em; margin-top: 1.2em; border-radius: 8px;">
                 <h4 id="arrPanelTitle" style="margin: 0 0 1em 0; font-size: 1.05em; display: flex; align-items: center; gap: 0.4em;">
                     <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span>
                     Add *arr Connection
@@ -286,12 +326,14 @@
                         <input is="emby-input" type="text" id="addArrBaseUrl" class="emby-input" placeholder="e.g., http://192.168.1.100:7878" />
                         <div class="fieldDescription">The reachable URL of the *arr instance. Do not include trailing slashes.</div>
                     </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="addArrApiKey">API Key</label>
-                        <input is="emby-input" type="text" id="addArrApiKey" class="emby-input" placeholder="Enter 32-character API Key" />
-                        <div style="margin-top: 0.5em;">
-                            <button is="emby-button" type="button" id="btnTestArrConnection" class="raised">Test Connection</button>
+                    <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                        <div class="inputContainer" style="flex-grow: 1; margin: 0;">
+                            <label class="inputLabel" for="addArrApiKey">API Key</label>
+                            <input is="emby-input" type="text" id="addArrApiKey" class="emby-input" placeholder="Enter 32-character API Key" />
                         </div>
+                        <button is="emby-button" type="button" id="btnTestArrConnection" class="raised emby-button" style="margin: 0; white-space: nowrap;">
+                            <span>Test Connection</span>
+                        </button>
                     </div>
                 </div>
                 <div class="quickstrm-form-row" style="margin-bottom: 0.4em;">
@@ -312,7 +354,7 @@
                     </label>
                 </div>
                 <div style="display: flex; gap: 0.6em; flex-wrap: wrap;">
-                    <button is="emby-button" type="button" id="btnSaveArrInstance" class="raised button-submit emby-button">
+                    <button is="emby-button" type="button" id="btnSaveArrConnection" class="raised button-submit emby-button btnSaveArrInstance">
                         <span>Save Connection</span>
                     </button>
                     <button is="emby-button" type="button" id="btnCancelArrInstance" class="raised emby-button">
@@ -387,42 +429,60 @@
                 </div>
 
                 <!-- Controls: Mode Selector & Buttons -->
-                <div class="flex align-items-center" style="gap: 1em; margin-top: 1.2em; flex-wrap: wrap;">
-                    <div class="selectContainer" style="flex: 1; min-width: 180px;">
+                <div style="display: flex; flex-wrap: wrap; gap: 1em; align-items: center; margin-top: 1.2em;">
+                    <div class="selectContainer" style="min-width: 200px; flex: 1;">
                         <select is="emby-select" id="selectProbeMode" class="emby-select" label="Probe Mode">
                             <option value="Incremental">Incremental probe</option>
-                            <option value="Full">Full probe</option>
+                            <option value="All">All items (Full probe)</option>
                         </select>
                     </div>
-                    <div style="display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap;">
-                        <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit block emby-button" style="margin: 0; min-width: 130px;">
-                            <span>Start pre-probe</span>
-                        </button>
-                        <button is="emby-button" type="button" id="btnStopProbe" class="raised emby-button" style="margin: 0; min-width: 100px; display: none; background: #b71c1c; color: white;">
-                            <span>Stop</span>
-                        </button>
-                        <button is="emby-button" type="button" id="btnResetFailureCache" class="raised emby-button" title="Flush negative cache of failed background probes" style="margin: 0;">
-                            <span>Reset Failure Cache</span>
-                        </button>
-                    </div>
+                    <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit emby-button" style="margin: 0; min-width: 140px;">
+                        <span>Start pre-probe</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnStopProbe" class="raised emby-button" style="margin: 0; min-width: 100px; display: none; background: #b71c1c; color: white;">
+                        <span>Stop</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnResetFailureCache" class="raised emby-button" title="Flush negative cache of failed background probes" style="margin: 0;">
+                        <span>Reset Failure Cache</span>
+                    </button>
                 </div>
 
                 <!-- Live Progress Area -->
                 <div id="probeProgressSection" style="margin-top: 1.5em;">
                     <div style="font-size: 0.85em; margin-bottom: 0.5em; display: flex; justify-content: space-between;">
-                        <span id="lblTaskStatus" style="color: var(--text-muted-color, #999);">Status: Idle</span>
+                        <span id="probeStatusText" style="color: var(--text-muted-color, #999);">Status: Idle</span>
                     </div>
 
-                    <div style="width: 100%; height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 3px; overflow: hidden;">
-                        <div id="probeProgressBar" style="width: 0%; height: 100%; background: var(--theme-primary-color, #00a4dc); transition: width 0.25s ease;"></div>
+                    <div class="taskProgress" style="background: rgba(0,0,0,0.2); height: 5px; border-radius: 3px; overflow: hidden; position: relative;">
+                        <div id="probeProgressBar" class="taskProgressInner" style="background: var(--theme-primary-color); height: 100%; width: 0%;"></div>
                     </div>
 
-                    <div id="probeCurrentItemRow" style="font-size: 0.8em; color: var(--text-muted-color, #777); margin-top: 0.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    <div id="probeItemText" style="font-size: 0.8em; color: var(--text-muted-color, #777); margin-top: 0.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                         Probing: <span id="lblCurrentItem" style="color: var(--text-color, #bbb);">-</span>
                     </div>
                 </div>
             </div>
         </div>
 
+        <!-- 5. Recent Actions Ledger (paperList) -->
+        <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
+                <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
+                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">history</span>
+                    Recent Actions
+                </h3>
+                <button is="emby-button" type="button" id="btnRefreshLedger" class="raised emby-button" style="margin: 0;">
+                    <span>Refresh Ledger</span>
+                </button>
+            </div>
+            <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
+                Live activity log showing the last 100 auto-heal, circuit breaker, and probe telemetry events.
+            </div>
+            <div id="recentActionsList" class="paperList" style="max-height: 250px; overflow-y: auto; padding: 1em; border-radius: 6px; background: rgba(0, 0, 0, 0.2); font-family: monospace; font-size: 0.85em; line-height: 1.6;">
+                <div style="color: var(--text-muted-color, #777);">Loading recent actions...</div>
+            </div>
+        </div>
+
     </div>
 </div>
+

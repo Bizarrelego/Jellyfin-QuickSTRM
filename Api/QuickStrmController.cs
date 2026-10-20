@@ -70,18 +70,81 @@ public class QuickStrmController : ControllerBase
     }
 
     /// <summary>
-    /// Starts a probe task. Mode: "Incremental" or "Full".
+    /// Returns recent action ledger entries.
+    /// </summary>
+    [HttpGet("Ledger")]
+    [Authorize(Policy = "RequiresElevation")]
+    public ActionResult GetLedger()
+    {
+        var config = Plugin.Instance?.Configuration;
+        if (config is null)
+        {
+            return Ok(Array.Empty<string>());
+        }
+
+        string[] entries;
+        lock (config)
+        {
+            entries = config.ActionLedger.ToArray();
+        }
+
+        return Ok(entries);
+    }
+
+
+    /// <summary>
+    /// Starts a manual pre-probe task or enqueues matching .strm items into the low-priority channel.
+    /// Mode/Scope: "Incremental" (unprobed items only) or "All" / "Full" (all .strm items).
     /// </summary>
     [HttpPost("Probe/Start")]
     [Authorize(Policy = "RequiresElevation")]
-    public ActionResult StartProbe([FromQuery] string mode = "Incremental")
+    public ActionResult StartProbe([FromQuery] string? mode = null, [FromBody] ProbeStartRequest? body = null)
     {
-        if (_probeService.StartProbe(mode))
+        var scope = body?.Scope ?? body?.Mode ?? mode ?? "Incremental";
+        var isIncremental = !string.Equals(scope, "All", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(scope, "Full", StringComparison.OrdinalIgnoreCase);
+
+        // Query ILibraryManager for video items
+        var query = new InternalItemsQuery
         {
-            return NoContent();
+            MediaTypes = new[] { MediaType.Video },
+            Recursive = true
+        };
+
+        var allVideos = _libraryManager.GetItemList(query);
+        var enqueuedCount = 0;
+
+        foreach (var item in allVideos)
+        {
+            if (item.Path is not null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+            {
+                if (isIncremental && item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0)
+                {
+                    continue;
+                }
+
+                if (_probeService.EnqueueBackgroundPersist(item, highPriority: false, force: !isIncremental))
+                {
+                    enqueuedCount++;
+                }
+            }
         }
 
-        return Conflict(new { Message = "A probe task is already running." });
+        // Also trigger probe service batch state tracking for UI progress display
+        _probeService.StartProbe(isIncremental ? "Incremental" : "Full");
+
+        _logger.LogInformation(
+            "QuickSTRM: Manual probe started with scope {Scope}; enqueued {Count} .strm items into low-priority channel",
+            isIncremental ? "Incremental" : "All",
+            enqueuedCount);
+
+        return Ok(new
+        {
+            Success = true,
+            Enqueued = enqueuedCount,
+            Scope = isIncremental ? "Incremental" : "All",
+            Message = $"Enqueued {enqueuedCount} .strm items ({(isIncremental ? "Incremental" : "All")}) into probe queue."
+        });
     }
 
     /// <summary>
@@ -467,4 +530,13 @@ public class RewriteUrlsRequest
     public string OldPrefix { get; set; } = string.Empty;
     public string NewPrefix { get; set; } = string.Empty;
     public bool DryRun { get; set; } = true;
+}
+
+/// <summary>
+/// Request payload for starting a manual library pre-probe.
+/// </summary>
+public class ProbeStartRequest
+{
+    public string? Scope { get; set; }
+    public string? Mode { get; set; }
 }

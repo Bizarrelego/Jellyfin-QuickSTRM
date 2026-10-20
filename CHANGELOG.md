@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.0.0] - 2026-10-20
+
+### ⚡ Native Telemetry, Predictive VFS Pre-Warming & Hardened Probe Pipeline
+
+Major release delivering full predictive cloud pre-warming, automated proactive dead link sweeping, transparent redirect resolution, hardened probe killswitch safeguards, and native Jellyfin activity telemetry for zero-touch cloud `.strm` orchestration.
+
+### Added
+- **Predictive VFS Pre-Warmer Middleware**:
+  - Implemented ASP.NET Core middleware (`PredictivePrewarmMiddleware`) intercepting item detail page loads (`^/Users/[^/]+/Items/([^/]+)$`) before client playback requests.
+  - Automatically dispatches non-blocking background pre-warming via `VfsPrewarmService`, reading the initial 5MB via HTTP Range requests or FileStream reads.
+  - Pages cloud VFS chunks (e.g., rclone/InfiniDysk) into RAM and primes network sockets, completely bypassing disk spin-up latency when the user hits "Play".
+  - Protected with a 5-minute sliding `MemoryCache` debouncer to eliminate redundant I/O during back-and-forth UI navigation.
+- **Proactive STRM Dead Link Sweeper Task**:
+  - Added `ProactiveSweeperTask` implementing Jellyfin's native `IScheduledTask` interface, scheduled to run daily at 3:00 AM.
+  - Sequentially scans all `.strm` media across the library using a paced verification loop (1000ms delay between items) with lightweight HTTP HEAD requests.
+  - Automatically triggers the 404 auto-healing and *arr replacement workflow ahead of time, ensuring dead cloud links are replaced before users ever attempt playback.
+  - Live progress reporting displayed natively in the Jellyfin Dashboard Task Manager.
+- **Absolute URL Pre-Resolution**:
+  - Enhanced `ReadStrmUrlAsync` with single-hop redirect pre-resolution using a dedicated `SocketsHttpHandler` with `AllowAutoRedirect = false`.
+  - Automatically intercepts HTTP 301, 302, 307, and 308 redirect status codes and extracts the absolute direct-to-IP URL from the `Location` header.
+  - Caches direct URLs in a thread-safe `ConcurrentDictionary`, allowing Fire TV Stick 4K and Astra clients to bypass playback redirect hops entirely.
+- **Native Action Ledger UI**:
+  - Added an in-memory, rolling `Queue<string> ActionLedger` capped at 100 entries in `PluginConfiguration.cs`, safely serialized via an XML-safe surrogate (`ActionLedgerSerialized`).
+  - Added a dedicated REST API endpoint `GET /QuickStrm/Ledger` returning timestamped operational history.
+  - Built a scrolling, styled `<div class="paperList">` ("Recent Actions") in the dashboard (`configPage.html` & `configPage.js`) with manual refresh controls and event-specific color coding for live monitoring of auto-heal and circuit breaker activity.
+- **Hardened 8-Second FFprobe Killswitch**:
+  - Wrapped metadata probing execution in `ProbeItemCoreAsync` and inline encoder probes in `ProbeOneInlineAsync` with a strict `CancellationTokenSource(TimeSpan.FromSeconds(8))`.
+  - Catches `OperationCanceledException` to treat dead or unresponsive remote links as unreachable, immediately aborting database writes and trickplay locks.
+  - Enters failed items into the 1-hour negative cache to gracefully report missing stream info and eliminate infinite-spinning client playback loops.
+
+### Changed
+- **.NET 10.0 / Jellyfin 12.2.0 SDK Migration**:
+  - Upgraded target framework to `net10.0` aligned with Jellyfin 12.2.0 runtime and `12.2.0.0` Target ABI.
+  - Maintained full binary compatibility with Jellyfin 12.2.0 core libraries (`MediaBrowser.Controller`, `MediaBrowser.Model`, `MediaBrowser.Common`).
+- **Transition to Native `IActivityManager` Telemetry**:
+  - Created `TelemetryService` injected with Jellyfin's core `MediaBrowser.Model.Activity.IActivityManager`.
+  - Native activity events (`STRM Auto-Heal`, `Circuit Breaker Tripped`, `Circuit Breaker Reset`) are dispatched directly into Jellyfin's administrative Activity Log.
+- **Strict `System.Text.Json` Webhook Parsing**:
+  - Enforced strongly-typed `ArrWebhookPayload` POCO parsing with `[JsonPropertyName]` mappings, eliminating loose dynamic JSON inspection, reducing memory allocations, and rejecting malformed payloads with `400 Bad Request`.
+
+### Security
+- **Trickplay Database Lock Prevention**:
+  - Automatically enforces `EnableTrickplay = false` and strips `.bif` metadata attachments on all probed `.strm` media, persisting the protection lock via `_itemRepository.UpdateItem`.
+  - Prevents automated scheduled trickplay tasks from downloading full remote video files from cloud mounts, saving upstream bandwidth and preventing host disk exhaustion.
+- **SQLite Write-Lock Debouncing**:
+  - Batches file system monitor notifications and injects 50ms pacing between SQLite writes, eliminating write-lock contention (`database is locked`) during bulk season grabs on low-power host CPUs (e.g., Intel Core i3).
+
+---
+
 ## [2.0.0] - 2026-10-20
 
 ### 🚀 Major Platform Upgrade & Zero-Touch Orchestration Suite
@@ -39,6 +88,9 @@ Major release establishing QuickSTRM as a self-contained, zero-touch `.strm` orc
   - **Debounced SQLite I/O with 50ms Pacing**: Batches filesystem monitor updates and injects 50ms pacing between SQLite writes, eliminating write-lock contention (`database is locked`) during bulk season grabs on low-power hosts (e.g., Intel Core i3).
   - **Deferred Virtual Chapter Synthesis**: Virtual 5-minute chapter synthesis is decoupled from initial playback and deferred to the `PlaybackStopped` session event, ensuring zero database write-locks while Fire TV Stick 4K or Astra clients request initial video chunks.
   - **Next-Episode Pre-Warming**: Predictively resolves and enqueues the next sequential episode in the High Priority lane upon playback start for buffer-free, instantaneous autoplay transitions.
+  - **Predictive VFS Pre-Warming Middleware**: Intercepts item detail page requests (`^/Users/[^/]+/Items/([^/]+)$`) via `PredictivePrewarmMiddleware` and non-blockingly pre-warms the first 5MB via HTTP Range or FileStream read, backed by a 5-minute sliding `MemoryCache` to prevent duplicate reads on rapid client back-and-forth navigation.
+  - **Proactive STRM Dead Link Sweeper Task**: Added `ProactiveSweeperTask` implementing `IScheduledTask` running daily at 3:00 AM with paced HTTP HEAD verification (1000ms delay between items) to automatically trigger 404 auto-healing and *arr replacement grabs before playback is attempted.
+  - **Trickplay Prevention on .STRM Streams**: Automatically locks `EnableTrickplay = false` and purges `.bif` metadata attachments inside `ProbeItemCoreAsync`, persisting the protection lock via `_itemRepository.UpdateItem` to protect bandwidth, avoid remote bans, and eliminate host I/O churn.
   - **Global 2-Slot Concurrency Gate**: Bounded `SemaphoreSlim(2, 2)` limiting concurrent `ffprobe` processes across playback and batch scans, preventing CPU starvation.
 - **Strict Webhook JSON Schema Models**:
   - Created strongly-typed `ArrWebhookPayload` POCOs with `[JsonPropertyName]` mappings, eliminating `dynamic`, `JObject`, and DOM walks to reduce memory allocations and GC pressure.

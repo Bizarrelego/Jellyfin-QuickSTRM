@@ -23,6 +23,7 @@ using System.Threading.Channels;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Activity;
+using System.Reflection;
 
 namespace QuickSTRM;
 
@@ -182,6 +183,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// <summary>Gets the name of the item currently being probed.</summary>
     public string CurrentItemName { get; private set; } = string.Empty;
 
+    private readonly TelemetryService _telemetryService;
     private readonly IMediaEncoder _mediaEncoder;
 
     public ProbeService(
@@ -191,8 +193,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         IMemoryCache memoryCache,
         IActivityManager activityManager,
         ILogger<ProbeService> logger,
+        TelemetryService telemetryService,
         IItemRepository? itemRepository = null)
     {
+        _telemetryService = telemetryService;
         _activityManager = activityManager;
         _libraryManager = libraryManager;
         _directoryService = directoryService;
@@ -296,10 +300,10 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// Fire-and-forget: queues a standard background RefreshMetadata pass so the stream info is stored in the database
     /// and later plays take the zero-probe fast path. High-priority lane is used for live webhooks, playback fallbacks, and next-episode pre-warming.
     /// </summary>
-    public bool EnqueueBackgroundPersist(BaseItem item, bool highPriority = false)
+    public bool EnqueueBackgroundPersist(BaseItem item, bool highPriority = false, bool force = false)
     {
-        // protects memory: already-persisted items never enter the queue
-        if (HasStreamInfo(item))
+        // protects memory: already-persisted items never enter the queue unless forced
+        if (!force && HasStreamInfo(item))
         {
             return false;
         }
@@ -453,6 +457,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             {
                 _circuitTripped = false;
                 _logger.LogInformation("QuickSTRM: Circuit breaker manually reset to closed");
+                _ = _telemetryService.LogCircuitBreakerAsync("Reset", "Circuit breaker manually reset to closed.");
             }
         }
     }
@@ -486,7 +491,9 @@ public sealed class ProbeService : IHostedService, IDisposable
                         "QuickSTRM: Circuit breaker TRIPPED after {Count} consecutive failures. Queue processing and auto-deletion halted; retrying automatically in {Minutes} minutes (or reset manually)",
                         n,
                         CircuitCooldown.TotalMinutes);
-                    Notify($"Circuit Breaker Tripped - Cloud mount down. Retrying in {CircuitCooldown.TotalMinutes:0} minutes.");
+                    _ = _telemetryService.LogCircuitBreakerAsync(
+                        "Tripped",
+                        $"Circuit breaker tripped after {n} consecutive failures. Cloud mount down. Retrying in {CircuitCooldown.TotalMinutes:0} minutes.");
                 }
             }
         }
@@ -543,7 +550,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     Interlocked.Exchange(ref _circuitTrippedAtTicks, 0);
                     _circuitTripped = false;
                     _logger.LogInformation("QuickSTRM: Half-open trial succeeded; circuit breaker closed, queue processing resumed");
-                    Notify("Circuit Breaker Reset - Cloud mount restored.");
+                    _ = _telemetryService.LogCircuitBreakerAsync("Reset", "Half-open trial succeeded; circuit breaker closed, queue processing resumed.");
                 }
                 else
                 {
@@ -562,25 +569,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     // fire-and-forget admin notification in Jellyfin's activity log; never allowed to throw into the probe path
     private void Notify(string message)
     {
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _activityManager.CreateAsync(new Jellyfin.Database.Implementations.Entities.ActivityLog(
-                    "QuickSTRM",
-                    "System",
-                    Guid.Empty
-                )
-                {
-                    Overview = message,
-                    DateCreated = DateTime.UtcNow
-                }).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "QuickSTRM: Could not publish activity notification: {Message}", message);
-            }
-        });
+        _ = _telemetryService.LogEventAsync("QuickSTRM", message);
     }
 
     /// <summary>
@@ -601,9 +590,24 @@ public sealed class ProbeService : IHostedService, IDisposable
         return await PreflightCoreAsync(item, ct).ConfigureAwait(false);
     }
 
+    // Cache of pre-resolved direct URLs to bypass redirect hops on clients like Fire TV
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _resolvedUrlCache = new(StringComparer.OrdinalIgnoreCase);
+
+    // Lightweight client with AllowAutoRedirect disabled for single-hop redirect pre-resolution
+    private static readonly HttpClient _redirectResolutionClient = new(new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(3)
+    };
+
     /// <summary>
     /// Reads only the first non-empty line of a .strm file up to 4096 characters,
     /// avoiding large object heap (LOH) allocations on corrupted or binary files.
+    /// Executes a lightweight HTTP HEAD request with AllowAutoRedirect = false to pre-resolve
+    /// 301, 302, and 307 redirects, caching and returning the direct absolute URL.
     /// </summary>
     public static async Task<string?> ReadStrmUrlAsync(string path, CancellationToken ct = default)
     {
@@ -631,6 +635,51 @@ public sealed class ProbeService : IHostedService, IDisposable
             var trimmed = line.Trim();
             if (!string.IsNullOrEmpty(trimmed))
             {
+                if (_resolvedUrlCache.TryGetValue(trimmed, out var cached))
+                {
+                    return cached;
+                }
+
+                if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)
+                    && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                {
+                    try
+                    {
+                        using var redirectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        redirectCts.CancelAfter(TimeSpan.FromSeconds(3));
+
+                        using var request = new HttpRequestMessage(HttpMethod.Head, uri);
+                        using var response = await _redirectResolutionClient.SendAsync(
+                            request,
+                            HttpCompletionOption.ResponseHeadersRead,
+                            redirectCts.Token).ConfigureAwait(false);
+
+                        if (response.StatusCode is HttpStatusCode.Moved
+                            or HttpStatusCode.Redirect
+                            or HttpStatusCode.TemporaryRedirect
+                            or (HttpStatusCode)308)
+                        {
+                            if (response.Headers.Location is not null)
+                            {
+                                var resolvedUri = response.Headers.Location.IsAbsoluteUri
+                                    ? response.Headers.Location
+                                    : new Uri(uri, response.Headers.Location);
+
+                                var directUrl = resolvedUri.ToString();
+                                _resolvedUrlCache[trimmed] = directUrl;
+                                return directUrl;
+                            }
+                        }
+
+                        _resolvedUrlCache[trimmed] = trimmed;
+                        return trimmed;
+                    }
+                    catch (Exception)
+                    {
+                        return trimmed;
+                    }
+                }
+
                 return trimmed;
             }
         }
@@ -799,6 +848,38 @@ public sealed class ProbeService : IHostedService, IDisposable
             return;
         }
 
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await AutoHealDeadItemAsync(item).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "QuickSTRM: AutoHealDeadItemAsync failed for {Name}", item.Name);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Executes auto-heal deletion and *arr replacement for a confirmed dead (404) .strm item.
+    /// Verifies mount health, deletes the local .strm file, removes the item from Jellyfin library,
+    /// and invokes <see cref="OnStrmDeleted"/> to trigger *arr recovery.
+    /// </summary>
+    public async Task AutoHealDeadItemAsync(BaseItem item, CancellationToken ct = default)
+    {
+        if (Plugin.Instance?.Configuration is not { EnableAutoDelete: true })
+        {
+            _logger.LogInformation("QuickSTRM: Auto-delete disabled in configuration; skipping deletion of dead .strm link {Name}", item.Name);
+            return;
+        }
+
+        if (!IsParentDirectoryReadable(item.Path))
+        {
+            _logger.LogWarning("QuickSTRM: Parent directory unreadable or mount marker missing for {Name}; treating failure as temporary (dropped mount)", item.Name);
+            return;
+        }
+
         try
         {
             var deletedPath = item.Path;
@@ -811,19 +892,11 @@ public sealed class ProbeService : IHostedService, IDisposable
             _libraryManager.DeleteItem(item, new DeleteOptions { DeleteFileLocation = false });
             _logger.LogWarning("QuickSTRM: Auto-deleted dead .strm link {Name} ({Path})", item.Name, deletedPath);
 
+            await _telemetryService.LogAutoHealAsync(deletedPath ?? item.Name, item.Name).ConfigureAwait(false);
+
             if (!string.IsNullOrEmpty(deletedPath) && OnStrmDeleted is not null)
             {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await OnStrmDeleted.Invoke(deletedPath).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "QuickSTRM: OnStrmDeleted handler encountered an error for {Path}", deletedPath);
-                    }
-                });
+                await OnStrmDeleted.Invoke(deletedPath).ConfigureAwait(false);
             }
         }
         catch (Exception ex)
@@ -877,6 +950,9 @@ public sealed class ProbeService : IHostedService, IDisposable
             return null;
         }
 
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var linkedBudget = CancellationTokenSource.CreateLinkedTokenSource(budgetToken, cts.Token);
+
         try
         {
             // improves latency: ffprobe only, no provider lookups or DB writes, so the 5s budget is spent on the network probe
@@ -887,7 +963,12 @@ public sealed class ProbeService : IHostedService, IDisposable
                     MediaType = DlnaProfileType.Video,
                     ExtractChapters = false
                 },
-                budgetToken).ConfigureAwait(false);
+                linkedBudget.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 8s for inline source {Id}", source.Id);
+            return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -1107,6 +1188,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             // protects bulk imports: the 60s clock starts only once we hold a slot, so queue time can't cause false timeouts
             timeoutCts.CancelAfter(timeout);
 
+            // Hardened FFprobe Killswitch: 8-second strict timeout on probe execution
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cts.Token);
+
             // NOTE: this plugin does not launch ffprobe itself. RefreshMetadata -> Jellyfin's IMediaEncoder starts the process
             // and ties it to this token. We cancel the token rather than holding a Process handle we do not own.
             await item.RefreshMetadata(
@@ -1115,14 +1200,18 @@ public sealed class ProbeService : IHostedService, IDisposable
                     EnableRemoteContentProbe = true,
                     MetadataRefreshMode = MetadataRefreshMode.FullRefresh
                 },
-                timeoutCts.Token).ConfigureAwait(false);
+                linkedCts.Token).ConfigureAwait(false);
             probeOk = HasStreamInfo(item);
+            if (probeOk)
+            {
+                ApplyTrickplayPrevention(item);
+            }
             return true;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            // a timeout is skipped rather than mistaken for a user stop, so batch probing continues
-            _logger.LogWarning("QuickSTRM: Probe timed out after {Seconds}s for {Name}", timeout.TotalSeconds, item.Name);
+            // Hardened FFprobe Killswitch: treat link as dead/unreachable, abort database save
+            _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 8s for {Name}; treating link as dead/unreachable and aborting DB save", item.Name);
             return false;
         }
         finally
@@ -1221,5 +1310,66 @@ public sealed class ProbeService : IHostedService, IDisposable
         _probeGate.Dispose();
         _headGate.Dispose();
         _shutdownCts.Dispose();
+    }
+
+    private void ApplyTrickplayPrevention(BaseItem item)
+    {
+        try
+        {
+            // Explicitly set item.EnableTrickplay = false
+            var prop = item.GetType().GetProperty("EnableTrickplay", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (prop != null && prop.CanWrite)
+            {
+                prop.SetValue(item, false);
+            }
+            else if (item.ProviderIds != null)
+            {
+                item.ProviderIds["EnableTrickplay"] = "false";
+            }
+
+            // Ensure any existing .bif metadata attachments are purged from the item's metadata dictionary
+            if (item.ProviderIds != null)
+            {
+                item.ProviderIds.Remove("bif");
+                item.ProviderIds.Remove("Bif");
+                item.ProviderIds.Remove("trickplay");
+                item.ProviderIds.Remove("Trickplay");
+                item.ProviderIds.Remove("BifAttachment");
+            }
+
+            // Call _itemRepository.UpdateItem to persist this protection lock
+            _itemRepository.UpdateItem(item);
+
+            _logger.LogDebug("QuickSTRM: Trickplay prevention lock applied for {Name}", item.Name);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "QuickSTRM: Trickplay prevention lock failed for {Name}", item.Name);
+        }
+    }
+}
+
+/// <summary>
+/// Extension methods for <see cref="IItemRepository"/> to persist item metadata updates.
+/// </summary>
+public static class ItemRepositoryExtensions
+{
+    /// <summary>
+    /// Persists item metadata changes to the repository or database.
+    /// </summary>
+    public static void UpdateItem(this IItemRepository? repository, BaseItem item)
+    {
+        if (repository is not null)
+        {
+            var updateMethod = repository.GetType().GetMethod("UpdateItem", new[] { typeof(BaseItem) })
+                ?? repository.GetType().GetMethod("UpdateItem", BindingFlags.Public | BindingFlags.Instance);
+            if (updateMethod is not null)
+            {
+                updateMethod.Invoke(repository, new object[] { item });
+                return;
+            }
+        }
+
+        item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None).GetAwaiter().GetResult();
     }
 }

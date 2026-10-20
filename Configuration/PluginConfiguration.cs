@@ -98,4 +98,50 @@ public class PluginConfiguration : BasePluginConfiguration
         get => string.IsNullOrEmpty(_webhookSecret) ? (_webhookSecret = Guid.NewGuid().ToString("N")) : _webhookSecret;
         set => _webhookSecret = string.IsNullOrEmpty(value) ? Guid.NewGuid().ToString("N") : value;
     }
+
+    /// <summary>
+    /// In-memory queue of recent action ledger entries capped at 100 entries.
+    /// </summary>
+    [System.Xml.Serialization.XmlIgnore]
+    public Queue<string> ActionLedger { get; set; } = new();
+
+    /// <summary>
+    /// XML-serializable surrogate for ActionLedger to ensure safe serialization without XmlSerializer reflection errors.
+    /// </summary>
+    [System.Xml.Serialization.XmlElement("ActionLedger")]
+    public string[] ActionLedgerSerialized
+    {
+        get
+        {
+            lock (_ledgerLock)
+            {
+                return ActionLedger.ToArray();
+            }
+        }
+        set
+        {
+            lock (_ledgerLock)
+            {
+                ActionLedger = value == null ? new Queue<string>() : new Queue<string>(value);
+            }
+        }
+    }
+
+    private readonly object _ledgerLock = new();
+
+    /// <summary>
+    /// Appends a formatted timestamped string to the ActionLedger, capping at 100 entries.
+    /// </summary>
+    public void AddLedgerEntry(string message)
+    {
+        lock (_ledgerLock)
+        {
+            while (ActionLedger.Count >= 100)
+            {
+                ActionLedger.Dequeue();
+            }
+            ActionLedger.Enqueue($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss UTC}] {message}");
+        }
+    }
 }
+
