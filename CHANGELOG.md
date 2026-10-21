@@ -8,7 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 ## [3.0.2] - 2026-10-25
 
-Auto-updating of manifest versions on build.
+### 🛡️ Checksum Integrity Hardening & Version-Pinned Release Pipeline
+
+Critical fix eliminating Jellyfin's `The checksum of the received data doesn't match` installation errors, delivering version-pinned release artifacts and automated dual-target publishing.
+
+### Fixed
+- **Version-Pinned Package Releases**:
+  - Replaced mutable `/releases/download/latest/QuickSTRM.zip` package URLs in `manifest.json` with immutable version-pinned release tags (`/releases/download/v{version}/QuickSTRM.zip`).
+  - Completely eliminates CDN caching race conditions and stale Jellyfin repository cache mismatches where downloaded packages from `latest` clashed with expected version checksums.
+
+### Added
+- **Automated Dual-Target GitHub Release Pipeline**:
+  - Releases now automatically publish simultaneously to permanent immutable tags (`v{version}`) and rolling `latest` releases.
+  - Full automated version synchronization across `QuickSTRM.csproj`, `meta.json`, `build.yaml`, and `manifest.json` driven directly by `CHANGELOG.md` on every push.
 
 ## [3.0.1] - 2026-10-20
 

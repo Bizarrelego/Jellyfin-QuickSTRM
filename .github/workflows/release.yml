@@ -65,6 +65,37 @@ jobs:
         run: |
           python .github/scripts/sync_release.py --update-checksum QuickSTRM.zip
 
+      # Deploy the version-pinned release first so the download asset is live before manifest.json is committed
+      - name: Deploy Versioned Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.sync.outputs.version }}
+          name: QuickSTRM v${{ steps.sync.outputs.version }}
+          target_commitish: main
+          draft: false
+          prerelease: false
+          make_latest: true
+          body_path: RELEASE_NOTES.md
+          files: |
+            QuickSTRM.zip
+            QuickSTRM.dll
+
+      # Also update the legacy rolling latest release for backward compatibility
+      - name: Deploy Rolling Latest Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: QuickSTRM (Latest)
+          target_commitish: main
+          draft: false
+          prerelease: false
+          make_latest: false
+          body_path: RELEASE_NOTES.md
+          files: |
+            QuickSTRM.zip
+            QuickSTRM.dll
+
+      # Commit and push manifest with exact checksum after artifacts are verified and live
       - name: Commit and Push Synchronized Release Files
         run: |
           git config --global user.name "github-actions[bot]"
@@ -78,16 +109,3 @@ jobs:
             # Explicitly push to the branch ref to bypass ambiguous tag/branch naming
             git push origin HEAD:refs/heads/main
           fi
-
-      - name: Deploy Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          target_commitish: main
-          draft: false
-          prerelease: false
-          make_latest: true
-          body_path: RELEASE_NOTES.md
-          files: |
-            QuickSTRM.zip
-            QuickSTRM.dll

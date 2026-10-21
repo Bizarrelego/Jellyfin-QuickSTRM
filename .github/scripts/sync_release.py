@@ -185,10 +185,10 @@ def sync_manifest(
     changelog: str,
     checksum: str | None = None,
     timestamp: str | None = None,
-    source_url: str = "https://github.com/Bizarrelego/Jellyfin-QuickSTRM/releases/download/latest/QuickSTRM.zip",
+    source_url: str | None = None,
     target_abi: str = "12.2.0.0",
 ) -> bool:
-    """Updates or prepends target version entry in manifest.json."""
+    """Updates or prepends target version entry in manifest.json with version-pinned sourceUrl."""
     manifest_path = repo_root / "manifest.json"
     if not manifest_path.exists():
         return False
@@ -199,13 +199,24 @@ def sync_manifest(
     target_plugin = data[0] if isinstance(data, list) else data
     versions_list = target_plugin.setdefault("versions", [])
 
+    if source_url is None:
+        source_url = f"https://github.com/Bizarrelego/Jellyfin-QuickSTRM/releases/download/v{version}/QuickSTRM.zip"
+
     if timestamp is None:
         timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    changed = False
+
+    # Upgrade any legacy versions pointing to 'latest' so they have immutable version-pinned download URLs
+    for v in versions_list:
+        v_num = v.get("version")
+        if v_num and "releases/download/latest" in v.get("sourceUrl", ""):
+            v["sourceUrl"] = f"https://github.com/Bizarrelego/Jellyfin-QuickSTRM/releases/download/v{v_num}/QuickSTRM.zip"
+            changed = True
 
     # Check if target version already exists at the top of versions
     if len(versions_list) > 0 and versions_list[0].get("version") == version:
         entry = versions_list[0]
-        changed = False
         if entry.get("changelog") != changelog and changelog:
             entry["changelog"] = changelog
             changed = True
@@ -234,6 +245,7 @@ def sync_manifest(
             "timestamp": timestamp,
         }
         versions_list.insert(0, new_entry)
+        changed = True
 
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
