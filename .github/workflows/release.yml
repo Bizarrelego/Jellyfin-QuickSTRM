@@ -30,6 +30,16 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Synchronize Version Metadata & Extract Notes
+        id: sync
+        run: |
+          python .github/scripts/sync_release.py --extract-notes
+
       - name: Publish QuickSTRM
         run: dotnet publish -c Release -o ./publish/QuickSTRM
 
@@ -51,46 +61,18 @@ jobs:
 
           cp ./publish/QuickSTRM/QuickSTRM.dll ./QuickSTRM.dll
 
-      - name: Extract Release Notes
-        id: notes
-        run: |
-          VERSION="${{ github.ref_name }}"
-          CLEAN_VER="${VERSION#v}"
-          
-          # Use Fgrep/Awk literal matching to prevent bracket regex interpretation
-          if grep -Fq "## [$CLEAN_VER]" CHANGELOG.md; then
-            awk -v ver="## [$CLEAN_VER]" '
-              index($0, ver) == 1 { flag=1; next }
-              flag && index($0, "## [") == 1 { flag=0 }
-              flag { print }
-            ' CHANGELOG.md > RELEASE_NOTES.md
-          else
-            cp CHANGELOG.md RELEASE_NOTES.md
-          fi
-
       - name: Update Manifest Checksum and Timestamp
         run: |
-          # Calculate MD5 and convert to uppercase
-          CHECKSUM=$(md5sum QuickSTRM.zip | awk '{ print $1 }' | tr 'a-z' 'A-Z')
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          
-          # Safely update the checksum and timestamp of the latest version (index 0)
-          # Handles both standard Jellyfin array-based manifests and single-object manifests
-          jq --arg checksum "$CHECKSUM" --arg timestamp "$TIMESTAMP" \
-            'if type=="array" then 
-               .[0].versions[0].checksum = $checksum | .[0].versions[0].timestamp = $timestamp 
-             else 
-               .versions[0].checksum = $checksum | .versions[0].timestamp = $timestamp 
-             end' manifest.json > manifest.tmp.json && mv manifest.tmp.json manifest.json
+          python .github/scripts/sync_release.py --update-checksum QuickSTRM.zip
 
-      - name: Commit and Push Manifest
+      - name: Commit and Push Synchronized Release Files
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add manifest.json
+          git add manifest.json meta.json build.yaml QuickSTRM.csproj README.md
           
           if ! git diff-index --quiet HEAD; then
-            git commit -m "chore: update manifest.json checksum [skip ci]"
+            git commit -m "chore(release): synchronize version metadata and manifest [skip ci]"
             # Pull latest changes from origin/main to prevent race-condition non-fast-forward rejection
             git pull --rebase origin main || true
             # Explicitly push to the branch ref to bypass ambiguous tag/branch naming

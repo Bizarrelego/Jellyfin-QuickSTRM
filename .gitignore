@@ -14,3 +14,8 @@
 # OS Generated
 .DS_Store
 Thumbs.db
+
+# Release artifacts
+QuickSTRM.zip
+QuickSTRM.dll
+RELEASE_NOTES.md
