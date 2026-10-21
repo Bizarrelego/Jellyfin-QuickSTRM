@@ -15,7 +15,7 @@ namespace QuickSTRM;
 public class PredictivePrewarmMiddleware : IMiddleware
 {
     private static readonly Regex ItemDetailRegex = new(
-        @"^/Users/[^/]+/Items/([^/]+)$",
+        @"^/(?:Users/[^/]+/)?Items/([0-9a-fA-F]{8}-?(?:[0-9a-fA-F]{4}-?){3}[0-9a-fA-F]{12})$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private readonly VfsPrewarmService _prewarmService;
@@ -33,14 +33,17 @@ public class PredictivePrewarmMiddleware : IMiddleware
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
         string? itemId = null;
-        var path = context.Request.Path.Value;
 
-        if (!string.IsNullOrEmpty(path))
+        if (HttpMethods.IsGet(context.Request.Method))
         {
-            var match = ItemDetailRegex.Match(path);
-            if (match.Success && match.Groups.Count > 1)
+            var path = context.Request.Path.Value;
+            if (!string.IsNullOrEmpty(path))
             {
-                itemId = match.Groups[1].Value;
+                var match = ItemDetailRegex.Match(path);
+                if (match.Success && match.Groups.Count > 1)
+                {
+                    itemId = match.Groups[1].Value;
+                }
             }
         }
 

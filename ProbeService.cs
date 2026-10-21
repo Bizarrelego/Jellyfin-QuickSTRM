@@ -55,7 +55,10 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly IMemoryCache _failedPersistCache;
 
     // tracks keys stored in _failedPersistCache so ClearFailureCache can flush them without clearing unrelated Jellyfin cache items
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _failedItemIds = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTime> _failedItemIds = new();
+
+    // in-flight probe coalescing to avoid duplicate ffprobe or hold-open loops across concurrent callers
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, Task<bool>> _inflightProbes = new();
 
     // absolute expiration: entry expires exactly 1 hour after failure regardless of how often it is queried;
     // prevents perpetual lockouts from automated client retries continuously resetting a sliding window
@@ -216,6 +219,9 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             _workerTasks.Add(Task.Run(() => ProcessQueueLoopAsync(_shutdownCts.Token)));
         }
+
+        // Launch background maintenance loop (periodic cache sweep every 10 minutes)
+        _workerTasks.Add(Task.Run(() => MaintenanceLoopAsync(_shutdownCts.Token)));
 
         return Task.CompletedTask;
     }
@@ -752,92 +758,115 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
     }
 
+    private const int MaxRedirectHops = 5;
+
     private static async Task<string> ResolveHttpRedirectWithHoldOpenAsync(string originalUrl, Uri uri, CancellationToken ct)
     {
         for (var attempt = 0; attempt <= HoldOpenRetryDelays.Length; attempt++)
         {
             try
             {
-                using var redirectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                redirectCts.CancelAfter(TimeSpan.FromSeconds(3));
+                var currentUri = uri;
+                var visitedUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { currentUri.AbsoluteUri };
+                var reachedTerminal = false;
 
-                using var request = new HttpRequestMessage(HttpMethod.Head, uri);
-                request.Headers.TryAddWithoutValidation("User-Agent", FfmpegUserAgent);
-
-                using var response = await _redirectResolutionClient.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    redirectCts.Token).ConfigureAwait(false);
-
-                var statusCode = response.StatusCode;
-
-                if (statusCode is HttpStatusCode.Moved
-                    or HttpStatusCode.Redirect
-                    or HttpStatusCode.TemporaryRedirect
-                    or (HttpStatusCode)308)
+                for (var hop = 0; hop < MaxRedirectHops; hop++)
                 {
-                    if (response.Headers.Location is not null)
-                    {
-                        var resolvedUri = response.Headers.Location.IsAbsoluteUri
-                            ? response.Headers.Location
-                            : new Uri(uri, response.Headers.Location);
+                    using var redirectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    redirectCts.CancelAfter(TimeSpan.FromSeconds(3));
 
-                        var directUrl = resolvedUri.ToString();
-                        CacheResolvedUrl(originalUrl, directUrl);
-                        return directUrl;
-                    }
-                }
-                else if (statusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.Forbidden)
-                {
-                    using var getCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    getCts.CancelAfter(TimeSpan.FromSeconds(3));
+                    using var request = new HttpRequestMessage(HttpMethod.Head, currentUri);
+                    request.Headers.TryAddWithoutValidation("User-Agent", FfmpegUserAgent);
 
-                    using var getRequest = new HttpRequestMessage(HttpMethod.Get, uri);
-                    getRequest.Headers.TryAddWithoutValidation("User-Agent", FfmpegUserAgent);
-                    getRequest.Headers.TryAddWithoutValidation("Range", "bytes=0-0");
-
-                    using var getResponse = await _redirectResolutionClient.SendAsync(
-                        getRequest,
+                    using var response = await _redirectResolutionClient.SendAsync(
+                        request,
                         HttpCompletionOption.ResponseHeadersRead,
-                        getCts.Token).ConfigureAwait(false);
+                        redirectCts.Token).ConfigureAwait(false);
 
-                    statusCode = getResponse.StatusCode;
+                    var statusCode = response.StatusCode;
+                    Uri? nextLocation = null;
 
                     if (statusCode is HttpStatusCode.Moved
                         or HttpStatusCode.Redirect
                         or HttpStatusCode.TemporaryRedirect
                         or (HttpStatusCode)308)
                     {
-                        if (getResponse.Headers.Location is not null)
+                        if (response.Headers.Location is not null)
                         {
-                            var resolvedUri = getResponse.Headers.Location.IsAbsoluteUri
-                                ? getResponse.Headers.Location
-                                : new Uri(uri, getResponse.Headers.Location);
-
-                            var directUrl = resolvedUri.ToString();
-                            CacheResolvedUrl(originalUrl, directUrl);
-                            return directUrl;
+                            nextLocation = response.Headers.Location.IsAbsoluteUri
+                                ? response.Headers.Location
+                                : new Uri(currentUri, response.Headers.Location);
                         }
                     }
-                }
-
-                // If 404, 502, 503, 504 -> InfiniDysk mount race condition, retry
-                if (statusCode is HttpStatusCode.NotFound
-                    or HttpStatusCode.BadGateway
-                    or HttpStatusCode.ServiceUnavailable
-                    or HttpStatusCode.GatewayTimeout)
-                {
-                    if (attempt < HoldOpenRetryDelays.Length)
+                    else if (statusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.Forbidden)
                     {
-                        await Task.Delay(HoldOpenRetryDelays[attempt], ct).ConfigureAwait(false);
+                        using var getCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        getCts.CancelAfter(TimeSpan.FromSeconds(3));
+
+                        using var getRequest = new HttpRequestMessage(HttpMethod.Get, currentUri);
+                        getRequest.Headers.TryAddWithoutValidation("User-Agent", FfmpegUserAgent);
+                        getRequest.Headers.TryAddWithoutValidation("Range", "bytes=0-0");
+
+                        using var getResponse = await _redirectResolutionClient.SendAsync(
+                            getRequest,
+                            HttpCompletionOption.ResponseHeadersRead,
+                            getCts.Token).ConfigureAwait(false);
+
+                        statusCode = getResponse.StatusCode;
+
+                        if (statusCode is HttpStatusCode.Moved
+                            or HttpStatusCode.Redirect
+                            or HttpStatusCode.TemporaryRedirect
+                            or (HttpStatusCode)308)
+                        {
+                            if (getResponse.Headers.Location is not null)
+                            {
+                                nextLocation = getResponse.Headers.Location.IsAbsoluteUri
+                                    ? getResponse.Headers.Location
+                                    : new Uri(currentUri, getResponse.Headers.Location);
+                            }
+                        }
+                    }
+
+                    if (nextLocation is not null)
+                    {
+                        if (!visitedUrls.Add(nextLocation.AbsoluteUri))
+                        {
+                            // Guard against redirect loops
+                            reachedTerminal = true;
+                            break;
+                        }
+
+                        currentUri = nextLocation;
                         continue;
                     }
 
-                    // Expired after all retries: do not cache dead URL, return original
-                    return originalUrl;
+                    // If 404, 502, 503, 504 -> InfiniDysk mount race condition, retry
+                    if (statusCode is HttpStatusCode.NotFound
+                        or HttpStatusCode.BadGateway
+                        or HttpStatusCode.ServiceUnavailable
+                        or HttpStatusCode.GatewayTimeout)
+                    {
+                        break;
+                    }
+
+                    reachedTerminal = true;
+                    break;
                 }
 
-                CacheResolvedUrl(originalUrl, originalUrl);
+                if (reachedTerminal)
+                {
+                    var finalUrl = currentUri.ToString();
+                    CacheResolvedUrl(originalUrl, finalUrl);
+                    return finalUrl;
+                }
+
+                if (attempt < HoldOpenRetryDelays.Length)
+                {
+                    await Task.Delay(HoldOpenRetryDelays[attempt], ct).ConfigureAwait(false);
+                    continue;
+                }
+
                 return originalUrl;
             }
             catch (Exception) when (attempt < HoldOpenRetryDelays.Length)
@@ -1163,7 +1192,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     {
         // prevents perpetual lockouts from automated client retries: absolute expiration of exactly 1 hour is enforced instead
         // of a sliding window, so background client requests or automated retries cannot continuously postpone the retry opportunity
-        _failedItemIds.TryAdd(item.Id, 0);
+        _failedItemIds[item.Id] = DateTime.UtcNow.Add(FailedPersistAbsoluteExpiration);
 
         var options = new MemoryCacheEntryOptions
         {
@@ -1180,7 +1209,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         _failedPersistCache.Set(
             FailureKey(item.Id),
-            0,
+            (byte)0,
             options);
 
         _logger.LogWarning(
@@ -1189,119 +1218,226 @@ public sealed class ProbeService : IHostedService, IDisposable
             FailedPersistAbsoluteExpiration.TotalHours);
     }
 
+    /// <summary>
+    /// Sweeps expired entries from _resolvedUrlCache and _failedItemIds to ensure bounded memory usage on large libraries.
+    /// </summary>
+    public void SweepExpiredCaches()
+    {
+        var now = DateTime.UtcNow;
+        var sweptUrls = 0;
+        var sweptFailed = 0;
+
+        foreach (var kvp in _resolvedUrlCache)
+        {
+            if (now >= kvp.Value.ExpiresAt)
+            {
+                if (_resolvedUrlCache.TryRemove(kvp.Key, out _))
+                {
+                    sweptUrls++;
+                }
+            }
+        }
+
+        foreach (var kvp in _failedItemIds)
+        {
+            if (now >= kvp.Value || !_failedPersistCache.TryGetValue(FailureKey(kvp.Key), out _))
+            {
+                _failedPersistCache.Remove(FailureKey(kvp.Key));
+                if (_failedItemIds.TryRemove(kvp.Key, out _))
+                {
+                    sweptFailed++;
+                }
+            }
+        }
+
+        if (sweptUrls > 0 || sweptFailed > 0)
+        {
+            _logger.LogDebug(
+                "QuickSTRM: Background cache sweep evicted {SweptUrls} expired URLs and {SweptFailed} expired negative cache entries",
+                sweptUrls,
+                sweptFailed);
+        }
+    }
+
+    private async Task MaintenanceLoopAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(10));
+        try
+        {
+            while (!ct.IsCancellationRequested && await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            {
+                SweepExpiredCaches();
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "QuickSTRM: Error in background cache maintenance sweep");
+        }
+    }
+
     private async Task<MediaInfo?> ProbeOneInlineAsync(
         MediaSourceInfo source,
         CancellationToken budgetToken,
         CancellationToken ct,
         BaseItem? item = null)
     {
-        // Resolve target path if source.Path points to a .strm file
-        var targetPath = source.Path;
-        if (!string.IsNullOrEmpty(targetPath) && targetPath.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+        var itemId = item?.Id ?? (Guid.TryParse(source.Id, out var parsedId) ? parsedId : Guid.Empty);
+        if (itemId != Guid.Empty && _inflightProbes.TryGetValue(itemId, out var existingTask))
         {
+            _logger.LogInformation("QuickSTRM: Awaiting existing in-flight probe for inline item {Id}", itemId);
             try
             {
-                var resolvedUrl = await ReadStrmUrlAsync(targetPath, budgetToken).ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(resolvedUrl))
-                {
-                    targetPath = resolvedUrl;
-                }
+                await existingTask.ConfigureAwait(false);
             }
-            catch (Exception)
+            catch
             {
             }
+            return null;
         }
 
-        // 1. If target local path does not exist yet: hold-open retry loop
-        if (!string.IsNullOrEmpty(targetPath) && Path.IsPathRooted(targetPath) && !targetPath.Contains("://", StringComparison.Ordinal))
+        TaskCompletionSource<bool>? inlineTcs = null;
+        if (itemId != Guid.Empty)
         {
-            if (!File.Exists(targetPath))
+            inlineTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_inflightProbes.TryAdd(itemId, inlineTcs.Task))
             {
-                var exists = false;
-                foreach (var delay in HoldOpenRetryDelays)
+                if (_inflightProbes.TryGetValue(itemId, out var racedTask))
                 {
-                    await Task.Delay(delay, budgetToken).ConfigureAwait(false);
-                    if (File.Exists(targetPath))
+                    try
                     {
-                        exists = true;
-                        break;
+                        await racedTask.ConfigureAwait(false);
                     }
-                }
-
-                if (!exists)
-                {
-                    _logger.LogWarning("QuickSTRM: Inline probe target local path does not exist after hold-open retries: {Path}", targetPath);
-                    var itemToFail = item ?? (Guid.TryParse(source.Id, out var id) ? _libraryManager.GetItemById(id) : null);
-                    if (itemToFail is not null)
+                    catch
                     {
-                        MarkPersistFailed(itemToFail);
-                        HandleFailure(itemToFail, FailureKind.TemporaryFailure);
                     }
                     return null;
                 }
             }
         }
-        // 2. If target is HTTP: verify readiness before acquiring probe slot
-        else if (!string.IsNullOrEmpty(targetPath) && Uri.TryCreate(targetPath, UriKind.Absolute, out var uri)
-            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+
+        MediaInfo? mediaInfo = null;
+        try
         {
-            var httpResult = await CheckHttpEndpointWithHoldOpenRetryAsync(uri, budgetToken).ConfigureAwait(false);
-            if (!httpResult.IsHealthy)
+            // Resolve target path if source.Path points to a .strm file
+            var targetPath = source.Path;
+            if (!string.IsNullOrEmpty(targetPath) && targetPath.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogWarning("QuickSTRM: Inline probe target HTTP endpoint dead after hold-open retries: {Uri} ({Status})", uri, httpResult.StatusCode);
-                var itemToFail = item ?? (Guid.TryParse(source.Id, out var id) ? _libraryManager.GetItemById(id) : null);
-                if (itemToFail is not null)
+                try
                 {
-                    MarkPersistFailed(itemToFail);
-                    HandleFailure(itemToFail, httpResult.FailureKind);
+                    var resolvedUrl = await ReadStrmUrlAsync(targetPath, budgetToken).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(resolvedUrl))
+                    {
+                        targetPath = resolvedUrl;
+                    }
                 }
+                catch (Exception)
+                {
+                }
+            }
+
+            // 1. If target local path does not exist yet: hold-open retry loop
+            if (!string.IsNullOrEmpty(targetPath) && Path.IsPathRooted(targetPath) && !targetPath.Contains("://", StringComparison.Ordinal))
+            {
+                if (!File.Exists(targetPath))
+                {
+                    var exists = false;
+                    foreach (var delay in HoldOpenRetryDelays)
+                    {
+                        await Task.Delay(delay, budgetToken).ConfigureAwait(false);
+                        if (File.Exists(targetPath))
+                        {
+                            exists = true;
+                            break;
+                        }
+                    }
+
+                    if (!exists)
+                    {
+                        _logger.LogWarning("QuickSTRM: Inline probe target local path does not exist after hold-open retries: {Path}", targetPath);
+                        var itemToFail = item ?? (Guid.TryParse(source.Id, out var id) ? _libraryManager.GetItemById(id) : null);
+                        if (itemToFail is not null)
+                        {
+                            MarkPersistFailed(itemToFail);
+                            HandleFailure(itemToFail, FailureKind.TemporaryFailure);
+                        }
+                        return null;
+                    }
+                }
+            }
+            // 2. If target is HTTP: verify readiness before acquiring probe slot
+            else if (!string.IsNullOrEmpty(targetPath) && Uri.TryCreate(targetPath, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            {
+                var httpResult = await CheckHttpEndpointWithHoldOpenRetryAsync(uri, budgetToken).ConfigureAwait(false);
+                if (!httpResult.IsHealthy)
+                {
+                    _logger.LogWarning("QuickSTRM: Inline probe target HTTP endpoint dead after hold-open retries: {Uri} ({Status})", uri, httpResult.StatusCode);
+                    var itemToFail = item ?? (Guid.TryParse(source.Id, out var id) ? _libraryManager.GetItemById(id) : null);
+                    if (itemToFail is not null)
+                    {
+                        MarkPersistFailed(itemToFail);
+                        HandleFailure(itemToFail, httpResult.FailureKind);
+                    }
+                    return null;
+                }
+            }
+
+            try
+            {
+                // protects low-end CPUs: shares the same 2-slot gate as background probes; the budget also covers the slot wait
+                await _probeGate.WaitAsync(budgetToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
                 return null;
             }
-        }
 
-        try
-        {
-            // protects low-end CPUs: shares the same 2-slot gate as background probes; the budget also covers the slot wait
-            await _probeGate.WaitAsync(budgetToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return null;
-        }
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var linkedBudget = CancellationTokenSource.CreateLinkedTokenSource(budgetToken, cts.Token);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var linkedBudget = CancellationTokenSource.CreateLinkedTokenSource(budgetToken, cts.Token);
-
-        try
-        {
-            // improves latency: ffprobe only, no provider lookups or DB writes, so the budget is spent on the network probe
-            return await _mediaEncoder.GetMediaInfo(
-                new MediaInfoRequest
-                {
-                    MediaSource = source,
-                    MediaType = DlnaProfileType.Video,
-                    ExtractChapters = false
-                },
-                linkedBudget.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 8s for inline source {Id}", source.Id);
-            return null;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
-        {
-            // protects playback: one source's failure or timeout yields null for that source only; the others still resolve
-            if (ex is not OperationCanceledException)
+            try
             {
-                _logger.LogWarning(ex, "QuickSTRM: Inline probe failed for source {Id}", source.Id);
+                // improves latency: ffprobe only, no provider lookups or DB writes, so the budget is spent on the network probe
+                mediaInfo = await _mediaEncoder.GetMediaInfo(
+                    new MediaInfoRequest
+                    {
+                        MediaSource = source,
+                        MediaType = DlnaProfileType.Video,
+                        ExtractChapters = false
+                    },
+                    linkedBudget.Token).ConfigureAwait(false);
+                return mediaInfo;
             }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 8s for inline source {Id}", source.Id);
+                return null;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                // protects playback: one source's failure or timeout yields null for that source only; the others still resolve
+                if (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "QuickSTRM: Inline probe failed for source {Id}", source.Id);
+                }
 
-            return null;
+                return null;
+            }
+            finally
+            {
+                ReleaseQuietly(_probeGate);
+            }
         }
         finally
         {
-            ReleaseQuietly(_probeGate);
+            if (itemId != Guid.Empty && inlineTcs is not null)
+            {
+                _inflightProbes.TryRemove(itemId, out _);
+                inlineTcs.TrySetResult(mediaInfo != null);
+            }
         }
     }
 
@@ -1477,88 +1613,131 @@ public sealed class ProbeService : IHostedService, IDisposable
         Action? onSlotReleased,
         TrialState trial)
     {
-        // protects low-end CPUs: only background work uses the heavy RefreshMetadata path; playback never waits on it
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-        // cheap HEAD check BEFORE waiting for / holding a gate slot, so dead links never occupy one of the 2 ffprobe slots;
-        // it passes the trial forward without changing the circuit state - only a full ffprobe success may close it
-        if (!await PreflightCoreAsync(item, ct).ConfigureAwait(false))
+        if (item.Id != Guid.Empty && _inflightProbes.TryGetValue(item.Id, out var existingTask))
         {
-            trial.Success = false;
-            return false;
+            _logger.LogInformation("QuickSTRM: In-flight probe coalesced for item {Name} ({Id})", item.Name, item.Id);
+            try
+            {
+                return await existingTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
-        try
+        TaskCompletionSource<bool>? probeTcs = null;
+        if (item.Id != Guid.Empty)
         {
-            await _probeGate.WaitAsync(ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return false;
+            probeTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_inflightProbes.TryAdd(item.Id, probeTcs.Task))
+            {
+                if (_inflightProbes.TryGetValue(item.Id, out var racedTask))
+                {
+                    try
+                    {
+                        return await racedTask.ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }
+            }
         }
 
         var probeOk = false;
-
         try
         {
-            // lets the persistence queue distinguish items waiting for a slot from items actually probing (inside the try so the
-            // matching release below always runs, even if this callback were ever to throw)
-            onSlotAcquired?.Invoke();
-            // protects bulk imports: the 60s clock starts only once we hold a slot, so queue time can't cause false timeouts
-            timeoutCts.CancelAfter(timeout);
+            // protects low-end CPUs: only background work uses the heavy RefreshMetadata path; playback never waits on it
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-            // Hardened FFprobe Killswitch: 8-second strict timeout on probe execution
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cts.Token);
-
-            // NOTE: this plugin does not launch ffprobe itself. RefreshMetadata -> Jellyfin's IMediaEncoder starts the process
-            // and ties it to this token. We cancel the token rather than holding a Process handle we do not own.
-            await item.RefreshMetadata(
-                new MetadataRefreshOptions(_directoryService)
-                {
-                    EnableRemoteContentProbe = true,
-                    MetadataRefreshMode = MetadataRefreshMode.FullRefresh
-                },
-                linkedCts.Token).ConfigureAwait(false);
-            probeOk = HasStreamInfo(item);
-            if (probeOk)
+            // cheap HEAD check BEFORE waiting for / holding a gate slot, so dead links never occupy one of the 2 ffprobe slots;
+            // it passes the trial forward without changing the circuit state - only a full ffprobe success may close it
+            if (!await PreflightCoreAsync(item, ct).ConfigureAwait(false))
             {
-                ApplyTrickplayPrevention(item);
+                trial.Success = false;
+                return false;
             }
-            return true;
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            // Hardened FFprobe Killswitch: treat link as dead/unreachable, abort database save
-            _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 8s for {Name}; treating link as dead/unreachable and aborting DB save", item.Name);
-            return false;
+
+            try
+            {
+                await _probeGate.WaitAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            try
+            {
+                // lets the persistence queue distinguish items waiting for a slot from items actually probing (inside the try so the
+                // matching release below always runs, even if this callback were ever to throw)
+                onSlotAcquired?.Invoke();
+                // protects bulk imports: the 60s clock starts only once we hold a slot, so queue time can't cause false timeouts
+                timeoutCts.CancelAfter(timeout);
+
+                // Hardened FFprobe Killswitch: 8-second strict timeout on probe execution
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cts.Token);
+
+                // NOTE: this plugin does not launch ffprobe itself. RefreshMetadata -> Jellyfin's IMediaEncoder starts the process
+                // and ties it to this token. We cancel the token rather than holding a Process handle we do not own.
+                await item.RefreshMetadata(
+                    new MetadataRefreshOptions(_directoryService)
+                    {
+                        EnableRemoteContentProbe = true,
+                        MetadataRefreshMode = MetadataRefreshMode.FullRefresh
+                    },
+                    linkedCts.Token).ConfigureAwait(false);
+                probeOk = HasStreamInfo(item);
+                if (probeOk)
+                {
+                    ApplyTrickplayPrevention(item);
+                }
+                return true;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Hardened FFprobe Killswitch: treat link as dead/unreachable, abort database save
+                _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 8s for {Name}; treating link as dead/unreachable and aborting DB save", item.Name);
+                return false;
+            }
+            finally
+            {
+                // protects low-end CPUs: always release the slot (even on error/cancel) so the 2-slot limit can't leak shut
+                onSlotReleased?.Invoke();
+                ReleaseQuietly(_probeGate);
+
+                // slot is already free here, so failure handling (file/library deletion) never holds an ffprobe slot; it is fully guarded so
+                // a fault here can never mask the real result or escape the pipeline
+                try
+                {
+                    if (probeOk)
+                    {
+                        RecordSuccess();
+                        trial.Success = true; // populated stream info = full end-to-end success
+                    }
+                    else if (!ct.IsCancellationRequested)
+                    {
+                        // timeouts, exceptions and empty/invalid ffprobe results are always temporary: never deletes anything
+                        trial.Success = false;
+                        MarkPersistFailed(item);
+                        HandleFailure(item, FailureKind.TemporaryFailure);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "QuickSTRM: Post-probe bookkeeping failed for {Name}", item.Name);
+                }
+            }
         }
         finally
         {
-            // protects low-end CPUs: always release the slot (even on error/cancel) so the 2-slot limit can't leak shut
-            onSlotReleased?.Invoke();
-            ReleaseQuietly(_probeGate);
-
-            // slot is already free here, so failure handling (file/library deletion) never holds an ffprobe slot; it is fully guarded so
-            // a fault here can never mask the real result or escape the pipeline
-            try
+            if (item.Id != Guid.Empty)
             {
-                if (probeOk)
-                {
-                    RecordSuccess();
-                    trial.Success = true; // populated stream info = full end-to-end success
-                }
-                else if (!ct.IsCancellationRequested)
-                {
-                    // timeouts, exceptions and empty/invalid ffprobe results are always temporary: never deletes anything
-                    trial.Success = false;
-                    MarkPersistFailed(item);
-                    HandleFailure(item, FailureKind.TemporaryFailure);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "QuickSTRM: Post-probe bookkeeping failed for {Name}", item.Name);
+                _inflightProbes.TryRemove(item.Id, out _);
+                probeTcs?.TrySetResult(probeOk);
             }
         }
     }
@@ -1622,6 +1801,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
 
         _failedItemIds.Clear();
+        _inflightProbes.Clear();
         _pendingPersist.Clear();
         _resolvedUrlCache.Clear();
 

@@ -25,6 +25,9 @@ namespace QuickSTRM;
 public class VfsPrewarmService : IDisposable
 {
     private const int PrewarmSizeBytes = 5 * 1024 * 1024; // 5 MB
+    private const int TailPrewarmSizeBytes = 1024 * 1024; // 1 MB
+    private const long TailThresholdBytes = 6L * 1024 * 1024; // 6 MB
+    private const int BufferSize = 81920; // 80 KB
 
     private readonly ILibraryManager _libraryManager;
     private readonly IMemoryCache _cache;
@@ -144,6 +147,9 @@ public class VfsPrewarmService : IDisposable
             {
                 await PreWarmFileStreamAsync(target, item.Path, item.Name, itemId, timeoutCts.Token).ConfigureAwait(false);
             }
+
+            // Adjacent Subtitle Pre-Warming
+            await PreWarmAdjacentSubtitlesAsync(item.Path, timeoutCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -169,7 +175,7 @@ public class VfsPrewarmService : IDisposable
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
         try
         {
             long totalRead = 0;
@@ -187,6 +193,77 @@ public class VfsPrewarmService : IDisposable
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+
+        // Tail Pre-Warming for HTTP (MP4/MOV rear moov atom fix)
+        var isMp4OrMov = false;
+        if (Uri.TryCreate(url, UriKind.Absolute, out var parsedUri))
+        {
+            var uriPath = parsedUri.AbsolutePath;
+            if (uriPath.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ||
+                uriPath.EndsWith(".mov", StringComparison.OrdinalIgnoreCase))
+            {
+                isMp4OrMov = true;
+            }
+        }
+
+        if (!isMp4OrMov && string.Equals(response.Content.Headers.ContentType?.MediaType, "video/mp4", StringComparison.OrdinalIgnoreCase))
+        {
+            isMp4OrMov = true;
+        }
+
+        long totalSize = 0;
+        if (response.Content.Headers.ContentRange?.Length.HasValue == true)
+        {
+            totalSize = response.Content.Headers.ContentRange.Length.Value;
+        }
+        else if (response.Content.Headers.ContentLength.HasValue)
+        {
+            totalSize = response.Content.Headers.ContentLength.Value;
+        }
+
+        if (isMp4OrMov && totalSize > TailThresholdBytes)
+        {
+            await PreWarmHttpTailAsync(url, itemName, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task PreWarmHttpTailAsync(string url, string itemName, CancellationToken ct)
+    {
+        try
+        {
+            using var tailRequest = new HttpRequestMessage(HttpMethod.Get, url);
+            tailRequest.Headers.TryAddWithoutValidation("Range", "bytes=-1048576");
+            tailRequest.Headers.UserAgent.ParseAdd("QuickSTRM/2.0");
+
+            using var tailResponse = await _httpClient.SendAsync(tailRequest, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            if (!tailResponse.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            await using var tailStream = await tailResponse.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+            try
+            {
+                long tailRead = 0;
+                int read;
+                while (tailRead < TailPrewarmSizeBytes &&
+                       (read = await tailStream.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, (int)(TailPrewarmSizeBytes - tailRead))), ct).ConfigureAwait(false)) > 0)
+                {
+                    tailRead += read;
+                }
+
+                _logger.LogInformation("QuickSTRM: Tail pre-warmed {Bytes:N0} bytes (moov atom) via HTTP Range for {Name}", tailRead, itemName);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "QuickSTRM: Tail pre-warm skipped or failed for {Name}", itemName);
         }
     }
 
@@ -213,10 +290,10 @@ public class VfsPrewarmService : IDisposable
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite,
-            bufferSize: 64 * 1024,
+            bufferSize: BufferSize,
             useAsync: true);
 
-        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
         try
         {
             long totalRead = 0;
@@ -230,10 +307,88 @@ public class VfsPrewarmService : IDisposable
             _logger.LogInformation(
                 "QuickSTRM: Pre-warmed {Bytes:N0} bytes via FileStream for {Name} ({ItemId})",
                 totalRead, itemName, itemId);
+
+            // Tail Pre-Warming for local mounted files (MP4/MOV rear moov atom fix)
+            var isMp4OrMov = localPath.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ||
+                             localPath.EndsWith(".mov", StringComparison.OrdinalIgnoreCase);
+
+            if (isMp4OrMov && fs.Length > TailThresholdBytes)
+            {
+                fs.Seek(fs.Length - TailPrewarmSizeBytes, SeekOrigin.Begin);
+                long tailRead = 0;
+                while (tailRead < TailPrewarmSizeBytes &&
+                       (read = await fs.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, (int)(TailPrewarmSizeBytes - tailRead))), ct).ConfigureAwait(false)) > 0)
+                {
+                    tailRead += read;
+                }
+
+                _logger.LogInformation("QuickSTRM: Tail pre-warmed {Bytes:N0} bytes (moov atom) via FileStream for {Name} ({ItemId})", tailRead, itemName, itemId);
+            }
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private async Task PreWarmAdjacentSubtitlesAsync(string strmPath, CancellationToken ct)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(strmPath);
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+            {
+                return;
+            }
+
+            var prefix = Path.GetFileNameWithoutExtension(strmPath);
+            var subExtensions = new[] { ".srt", ".ass", ".ssa", ".vtt" };
+
+            string[] candidateFiles;
+            try
+            {
+                candidateFiles = Directory.GetFiles(dir, $"{prefix}*");
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+            try
+            {
+                foreach (var file in candidateFiles)
+                {
+                    var ext = Path.GetExtension(file);
+                    if (subExtensions.Any(e => string.Equals(e, ext, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        try
+                        {
+                            await using var subFs = new FileStream(
+                                file,
+                                FileMode.Open,
+                                FileAccess.Read,
+                                FileShare.ReadWrite,
+                                bufferSize: 64 * 1024,
+                                useAsync: true);
+
+                            _ = await subFs.ReadAsync(buffer.AsMemory(0, 64 * 1024), ct).ConfigureAwait(false);
+                            _logger.LogDebug("QuickSTRM: Pre-warmed adjacent subtitle: {Path}", file);
+                        }
+                        catch (Exception)
+                        {
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "QuickSTRM: Adjacent subtitle pre-warming skipped for {Path}", strmPath);
         }
     }
 

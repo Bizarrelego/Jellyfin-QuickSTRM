@@ -143,5 +143,16 @@ public class PluginConfiguration : BasePluginConfiguration
             ActionLedger.Enqueue($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss UTC}] {message}");
         }
     }
+
+    /// <summary>
+    /// Empties the action ledger history.
+    /// </summary>
+    public void ClearLedger()
+    {
+        lock (_ledgerLock)
+        {
+            ActionLedger.Clear();
+        }
+    }
 }
 

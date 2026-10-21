@@ -18,6 +18,7 @@ export default function (view) {
     var metricActiveProbesSub = view.querySelector('#metricActiveProbesSub');
     var circuitBanner = view.querySelector('#circuitBreakerBanner');
     var circuitStatus = view.querySelector('#circuitBreakerStatus');
+    var btnResetCircuit = view.querySelector('#btnResetCircuitBreaker');
 
     // ── 2. Settings Form DOM references ──
     var form = view.querySelector('.quickStrmConfigurationForm');
@@ -38,6 +39,7 @@ export default function (view) {
     var addType = view.querySelector('#addArrType');
     var addBaseUrl = view.querySelector('#addArrBaseUrl');
     var addApiKey = view.querySelector('#addArrApiKey');
+    var btnToggleApiKey = view.querySelector('#btnToggleApiKeyVisibility');
     var addPathFrom = view.querySelector('#addArrPathFrom');
     var addPathTo = view.querySelector('#addArrPathTo');
     var addAutoHeal = view.querySelector('#addArrAutoHeal');
@@ -68,6 +70,7 @@ export default function (view) {
     var lblCurrentItem = view.querySelector('#lblCurrentItem');
     var recentActionsList = view.querySelector('#recentActionsList');
     var btnRefreshLedger = view.querySelector('#btnRefreshLedger');
+    var btnClearLedger = view.querySelector('#btnClearLedger');
 
     var pollTimer = null;
     var queuePollTimer = null;
@@ -357,7 +360,8 @@ export default function (view) {
                 metricActiveProbesSub.textContent = cacheCount === 1 ? '1 failed item in cache' : cacheCount + ' failed items in cache';
             }
 
-            circuitState = data.CircuitState || (data.CircuitTripped ? 'Open' : 'Closed');
+            var isCircuitOpen = data.CircuitBreakerOpen === true || data.CircuitTripped === true;
+            circuitState = data.CircuitState || (isCircuitOpen ? 'Open' : 'Closed');
             cooldownEndsAt = Date.now() + (data.CooldownSecondsRemaining || 0) * 1000;
             renderCircuit();
 
@@ -494,7 +498,14 @@ export default function (view) {
                 ? '<span class="quickstrm-badge quickstrm-badge-green" style="margin-left: 0.4em;">Auto-Heal Active</span>'
                 : '<span class="quickstrm-badge" style="background: rgba(255,255,255,0.06); color: #888; margin-left: 0.4em;">Auto-Heal Off</span>';
 
-            var pathMapping = (inst.PathFrom || '(none)') + ' &rarr; ' + (inst.PathTo || '(none)');
+            var hasPathFrom = !!(inst.PathFrom && inst.PathFrom.trim());
+            var hasPathTo = !!(inst.PathTo && inst.PathTo.trim());
+            var pathMappingLabel;
+            if (!hasPathFrom && !hasPathTo) {
+                pathMappingLabel = 'Path Mapping: Direct (Shared Mount)';
+            } else {
+                pathMappingLabel = 'Path: ' + (inst.PathFrom || '(none)') + ' \u2192 ' + (inst.PathTo || '(none)');
+            }
 
             html += '<div class="quickstrm-arr-card paperList" data-index="' + index + '">' +
                 '<div style="flex: 1; min-width: 260px;">' +
@@ -507,7 +518,7 @@ export default function (view) {
                     '<div style="font-size: 0.82em; color: var(--text-muted-color, #888); word-break: break-all;">' +
                         '<span>' + escapeHtml(inst.BaseUrl || '') + '</span>' +
                         '<span style="margin: 0 0.5em; opacity: 0.5;">|</span>' +
-                        '<span>Path: ' + escapeHtml(pathMapping) + '</span>' +
+                        '<span>' + escapeHtml(pathMappingLabel) + '</span>' +
                         (inst.ProvisionedWebhookId ? '<span style="margin: 0 0.5em; opacity: 0.5;">|</span><span>Hook #' + escapeHtml(inst.ProvisionedWebhookId) + '</span>' : '') +
                     '</div>' +
                 '</div>' +
@@ -533,7 +544,14 @@ export default function (view) {
                     if (addName) { addName.value = inst.Name || ''; }
                     if (addType) { addType.value = inst.ArrType || 'Radarr'; }
                     if (addBaseUrl) { addBaseUrl.value = inst.BaseUrl || ''; }
-                    if (addApiKey) { addApiKey.value = inst.ApiKey || ''; }
+                    if (addApiKey) {
+                        addApiKey.value = inst.ApiKey || '';
+                        addApiKey.type = 'password';
+                    }
+                    if (btnToggleApiKey) {
+                        var toggleSpan = btnToggleApiKey.querySelector('span');
+                        if (toggleSpan) { toggleSpan.textContent = 'Show'; } else { btnToggleApiKey.textContent = 'Show'; }
+                    }
                     if (addPathFrom) { addPathFrom.value = inst.PathFrom || ''; }
                     if (addPathTo) { addPathTo.value = inst.PathTo || ''; }
                     if (addAutoHeal) { addAutoHeal.checked = inst.AutoHealOn404 !== false; }
@@ -631,7 +649,14 @@ export default function (view) {
         if (addName) { addName.value = ''; }
         if (addType) { addType.value = 'Radarr'; }
         if (addBaseUrl) { addBaseUrl.value = ''; }
-        if (addApiKey) { addApiKey.value = ''; }
+        if (addApiKey) {
+            addApiKey.value = '';
+            addApiKey.type = 'password';
+        }
+        if (btnToggleApiKey) {
+            var toggleSpan = btnToggleApiKey.querySelector('span');
+            if (toggleSpan) { toggleSpan.textContent = 'Show'; } else { btnToggleApiKey.textContent = 'Show'; }
+        }
         if (addPathFrom) { addPathFrom.value = ''; }
         if (addPathTo) { addPathTo.value = ''; }
         if (addAutoHeal) { addAutoHeal.checked = true; }
@@ -1105,9 +1130,54 @@ export default function (view) {
         });
     }
 
+    if (btnResetCircuit) {
+        btnResetCircuit.addEventListener('click', function () {
+            apiPost('QuickStrm/CircuitBreaker/Reset').then(function () {
+                pollQueueStatus();
+                loadSummary();
+                if (typeof Dashboard !== 'undefined' && Dashboard.alert) {
+                    Dashboard.alert('Circuit breaker has been reset to closed.');
+                }
+            }).catch(function (err) {
+                showAlert('Failed to reset circuit breaker: ' + extractErrorMessage(err));
+            });
+        });
+    }
+
+    if (btnToggleApiKey && addApiKey) {
+        btnToggleApiKey.addEventListener('click', function () {
+            if (addApiKey.type === 'password') {
+                addApiKey.type = 'text';
+                var span = btnToggleApiKey.querySelector('span');
+                if (span) { span.textContent = 'Hide'; } else { btnToggleApiKey.textContent = 'Hide'; }
+            } else {
+                addApiKey.type = 'password';
+                var span = btnToggleApiKey.querySelector('span');
+                if (span) { span.textContent = 'Show'; } else { btnToggleApiKey.textContent = 'Show'; }
+            }
+        });
+    }
+
     if (btnRefreshLedger) {
         btnRefreshLedger.addEventListener('click', function () {
             loadLedger();
+        });
+    }
+
+    if (btnClearLedger) {
+        btnClearLedger.addEventListener('click', function () {
+            var confirmPromise = typeof Dashboard !== 'undefined' && typeof Dashboard.confirm === 'function'
+                ? Dashboard.confirm('Are you sure you want to clear the recent action ledger history?')
+                : Promise.resolve(confirm('Are you sure you want to clear the recent action ledger history?'));
+
+            confirmPromise.then(function (confirmed) {
+                if (!confirmed) { return; }
+                apiPost('QuickStrm/Ledger/Clear').then(function () {
+                    loadLedger();
+                }).catch(function (err) {
+                    showAlert('Failed to clear ledger: ' + extractErrorMessage(err));
+                });
+            });
         });
     }
 

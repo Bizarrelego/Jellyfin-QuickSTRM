@@ -172,6 +172,22 @@
             </div>
         </div>
 
+        <!-- Circuit Breaker Tripped Alert Banner (shown dynamically at top) -->
+        <div id="circuitBreakerBanner" class="paperList" style="display: none; background: rgba(183, 28, 28, 0.25); border: 1px solid #e53935; border-radius: 8px; padding: 1.2em; margin-bottom: 1.8em; color: #ffcdd2;">
+            <div style="font-weight: 600; font-size: 1.05em; margin-bottom: 0.3em; display: flex; align-items: center; gap: 0.4em;">
+                <span class="material-icons" style="color: #ef5350;">warning</span>
+                Circuit Breaker Tripped
+            </div>
+            <div>Consecutive probe failures exceeded the safety threshold. Queue processing and auto-deletion are halted to protect system resources.</div>
+            <div id="circuitBreakerStatus" style="margin-top: 0.5em; font-weight: 500;"></div>
+            <div style="margin-top: 0.8em; display: flex; align-items: center; gap: 0.8em; flex-wrap: wrap;">
+                <button is="emby-button" type="button" id="btnResetCircuitBreaker" class="raised emby-button" style="margin: 0; background: #e53935; color: white;">
+                    <span>Reset Circuit Breaker</span>
+                </button>
+                <span style="font-size: 0.85em; opacity: 0.85;">Recovery is also automatic once cloud mounts are reachable.</span>
+            </div>
+        </div>
+
         <!-- 1. Live Telemetry Grid -->
         <div class="quickstrm-metrics-grid">
             <!-- Metric 1: Circuit State -->
@@ -201,17 +217,6 @@
                 <div id="metricActiveProbes" class="quickstrm-metric-value">0 / 2</div>
                 <div id="metricActiveProbesSub" class="quickstrm-metric-sub">0 in cache</div>
             </div>
-        </div>
-
-        <!-- Circuit Breaker Tripped Alert Banner (shown dynamically) -->
-        <div id="circuitBreakerBanner" class="paperList" style="display: none; background: rgba(183, 28, 28, 0.25); border: 1px solid #e53935; border-radius: 8px; padding: 1.2em; margin-bottom: 1.8em; color: #ffcdd2;">
-            <div style="font-weight: 600; font-size: 1.05em; margin-bottom: 0.3em; display: flex; align-items: center; gap: 0.4em;">
-                <span class="material-icons" style="color: #ef5350;">warning</span>
-                Circuit Breaker Tripped
-            </div>
-            <div>Consecutive probe failures exceeded the safety threshold. Queue processing and auto-deletion are halted to protect system resources.</div>
-            <div id="circuitBreakerStatus" style="margin-top: 0.5em; font-weight: 500;"></div>
-            <div style="margin-top: 0.4em; font-size: 0.85em; opacity: 0.85;">Recovery is automatic once cloud mounts are reachable. Use "Reset Failure Cache" below to force an immediate manual reset.</div>
         </div>
 
         <!-- 2. Probing & Mount Protection (paperList) -->
@@ -329,7 +334,12 @@
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
                         <div class="inputContainer" style="flex-grow: 1; margin: 0;">
                             <label class="inputLabel" for="addArrApiKey">API Key</label>
-                            <input is="emby-input" type="text" id="addArrApiKey" class="emby-input" placeholder="Enter 32-character API Key" />
+                            <div style="display: flex; gap: 6px; align-items: center;">
+                                <input is="emby-input" type="password" id="addArrApiKey" class="emby-input" placeholder="Enter 32-character API Key" style="flex-grow: 1;" />
+                                <button is="emby-button" type="button" id="btnToggleApiKeyVisibility" class="raised emby-button" style="margin: 0; padding: 0.4em 0.8em; font-size: 0.85em; white-space: nowrap;">
+                                    <span>Show</span>
+                                </button>
+                            </div>
                         </div>
                         <button is="emby-button" type="button" id="btnTestArrConnection" class="raised emby-button" style="margin: 0; white-space: nowrap;">
                             <span>Test Connection</span>
@@ -471,9 +481,14 @@
                     <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">history</span>
                     Recent Actions
                 </h3>
-                <button is="emby-button" type="button" id="btnRefreshLedger" class="raised emby-button" style="margin: 0;">
-                    <span>Refresh Ledger</span>
-                </button>
+                <div style="display: flex; gap: 0.5em; flex-wrap: wrap;">
+                    <button is="emby-button" type="button" id="btnClearLedger" class="raised emby-button" style="margin: 0; background: #b71c1c; color: white;">
+                        <span>Clear History</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnRefreshLedger" class="raised emby-button" style="margin: 0;">
+                        <span>Refresh Ledger</span>
+                    </button>
+                </div>
             </div>
             <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
                 Live activity log showing the last 100 auto-heal, circuit breaker, and probe telemetry events.

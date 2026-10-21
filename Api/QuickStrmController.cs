@@ -37,17 +37,20 @@ public class QuickStrmController : ControllerBase
     private readonly ILibraryManager _libraryManager;
     private readonly ILibraryMonitor? _libraryMonitor;
     private readonly ILogger<QuickStrmController> _logger;
+    private readonly TelemetryService _telemetryService;
 
     public QuickStrmController(
         ProbeService probeService,
         ArrIntegrationService arrIntegrationService,
         ILibraryManager libraryManager,
+        TelemetryService telemetryService,
         ILogger<QuickStrmController> logger,
         ILibraryMonitor? libraryMonitor = null)
     {
         _probeService = probeService;
         _arrIntegrationService = arrIntegrationService;
         _libraryManager = libraryManager;
+        _telemetryService = telemetryService;
         _logger = logger;
         _libraryMonitor = libraryMonitor;
 
@@ -92,6 +95,17 @@ public class QuickStrmController : ControllerBase
         }
 
         return Ok(entries);
+    }
+
+    /// <summary>
+    /// Clears the recent action ledger history.
+    /// </summary>
+    [HttpPost("Ledger/Clear")]
+    [Authorize(Policy = "RequiresElevation")]
+    public ActionResult ClearLedger()
+    {
+        _telemetryService.ClearLedger();
+        return NoContent();
     }
 
 
@@ -194,6 +208,7 @@ public class QuickStrmController : ControllerBase
             HighPriorityWaiting = _probeService.HighPriorityQueueWaiting,
             LowPriorityWaiting = _probeService.LowPriorityQueueWaiting,
             CircuitTripped = _probeService.IsCircuitTripped,
+            CircuitBreakerOpen = _probeService.IsCircuitTripped,
             CircuitState = _probeService.CircuitState,
             CooldownSecondsRemaining = (int)Math.Ceiling(_probeService.CircuitCooldownRemaining.TotalSeconds),
             ConsecutiveFailures = _probeService.ConsecutiveFailures,
@@ -210,6 +225,17 @@ public class QuickStrmController : ControllerBase
     public ActionResult ResetQueue()
     {
         _probeService.ClearFailureCache();
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Manually resets the circuit breaker to closed state.
+    /// </summary>
+    [HttpPost("CircuitBreaker/Reset")]
+    [Authorize(Policy = "RequiresElevation")]
+    public ActionResult ResetCircuitBreaker()
+    {
+        _probeService.ResetCircuitBreaker();
         return NoContent();
     }
 

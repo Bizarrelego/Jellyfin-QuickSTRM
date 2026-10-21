@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.0.1] - 2026-10-20
+
+### 🚀 Cutting-Edge Concurrency Coalescing, Zero-Allocation Pre-Warming & Remux Safeguards
+
+Major stability and performance release delivering zero-allocation buffer pooling, rear `moov` atom pre-warming, adjacent subtitle caching, in-flight probe coalescing, multi-hop redirect resolution, and debounced telemetry I/O.
+
+### Added
+- **Zero-Allocation Buffer Pooling (`ArrayPool<byte>`)**:
+  - Replaced `new byte[81920]` buffer allocations in `VfsPrewarmService` with `ArrayPool<byte>.Shared.Rent(81920)` within `try/finally` blocks returning buffers to the shared pool, eliminating LOH allocations and Gen0 garbage collection spikes during high-throughput playback sweeps.
+- **Dual-End MP4/MOV Pre-Warming (Rear `moov` Atom Priming)**:
+  - Local Files: For `.mp4` and `.mov` media with size > 6MB, seeks to `fileStream.Length - 1MB` and reads the final 1MB chunk to prime the VFS tail cache for container indexes placed at the end of the file.
+  - Remote HTTP Streams: For `.mp4` and `.mov` URLs (or `video/mp4` content type) with size > 6MB, dispatches a secondary lightweight `GET` request with `Range: bytes=-1048576` (suffix byte range) to pre-warm the remote `moov` atom.
+- **Adjacent Subtitle Caching**:
+  - Automatically locates external subtitle files (`{itemFileNameWithoutExtension}*.srt`, `*.ass`, `*.ssa`, `*.vtt`) in the parent directory of `.strm` media and asynchronously reads the first 64KB of each file to prime the OS and VFS directory cache.
+- **In-Flight Probe Coalescing**:
+  - Introduced `_inflightProbes` (`ConcurrentDictionary<Guid, Task<bool>>`) in `ProbeService` across `ProbeOneInlineAsync` and `ProbeItemCoreAsync`, allowing concurrent playback requests for the same media item to await the existing probe task rather than spawning duplicate `ffprobe` processes or redundant hold-open loops.
+- **Multi-Hop Redirect Resolution (Up to 5 Hops)**:
+  - Refactored `ResolveHttpRedirectWithHoldOpenAsync` to follow HTTP 301, 302, 307, and 308 redirects up to `MaxRedirectHops = 5`.
+  - Safely resolves relative `Location` headers against the current request `Uri` (`new Uri(currentUri, response.Headers.Location)`).
+  - Protected against infinite redirect loops using `HashSet<string>(StringComparer.OrdinalIgnoreCase)`.
+- **Automated Cache Eviction & Memory Hygiene**:
+  - Added background maintenance loop running every 10 minutes via `PeriodicTimer` in `MaintenanceLoopAsync`, automatically sweeping expired keys from `_resolvedUrlCache` and `_failedItemIds` (and `_failedPersistCache`) to guarantee strictly bounded memory usage on 60,000+ item libraries.
+- **Debounced Telemetry Disk I/O & Manual Management Controls**:
+  - Added a 3-second `Timer` debounce latch in `TelemetryService` for `Plugin.Instance.SaveConfiguration()`, batching rapid action ledger writes during bulk scans and eliminating XML serialization disk spam.
+  - Added `ClearLedger()` method to `TelemetryService` and `PluginConfiguration`.
+  - Introduced authenticated REST API endpoints in `QuickStrmController`: `POST /QuickStrm/Ledger/Clear` and `POST /QuickStrm/CircuitBreaker/Reset` (secured with `[Authorize(Policy = "RequiresElevation")]`).
+  - Added `CircuitBreakerOpen = _probeService.IsCircuitTripped` in `GET /QuickStrm/Queue`.
+- **Dashboard UI Sanitization Pass & Polish**:
+  - Comprehensive `escapeHtml(str)` sanitization across all user-supplied parameters (`Name`, `BaseUrl`, `PathFrom`, `PathTo`, ledger entries) before injection into `innerHTML`.
+  - Replaced raw `&rarr;` strings with Unicode arrow `\u2192` (`→`), and display `"Path Mapping: Direct (Shared Mount)"` when paths are empty.
+  - Added top-level `#circuitBreakerBanner` with inline `"Reset Circuit Breaker"` button wired to `POST /QuickStrm/CircuitBreaker/Reset`.
+  - Added API key masking toggle (`type="password"` with inline Show/Hide toggle button).
+  - Added `"Clear History"` button (`#btnClearLedger`) next to `#btnRefreshLedger`.
+
+### Changed
+- **Universal Route Matching & Remux Lockup Prevention**:
+  - Updated `PredictivePrewarmMiddleware` route regex to `^/(?:Users/[^/]+/)?Items/([0-9a-fA-F]{8}-?(?:[0-9a-fA-F]{4}-?){3}[0-9a-fA-F]{12})$` and restricted triggers strictly to `HttpMethods.IsGet`.
+  - Added `Lavf/60.3.100` User-Agent header to redirect checks, matching Jellyfin's FFmpeg process.
+  - In `MediaSourceInterceptor`, immediately returns cached `MediaSourceInfo` when audio and video streams exist, ensuring remux readiness (`SupportsDirectPlay = true`, `SupportsDirectStream = true`, `SupportsTranscoding = true`) without triggering concurrent inline ffprobes during Moonfin/Astra audio remuxing.
+
+---
+
 ## [3.0.0] - 2026-10-20
 
 ### ⚡ Native Telemetry, Predictive VFS Pre-Warming & Hardened Probe Pipeline

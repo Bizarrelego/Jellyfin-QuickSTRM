@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Model.Activity;
@@ -10,10 +11,12 @@ namespace QuickSTRM;
 /// <summary>
 /// Telemetry service leveraging native Jellyfin activity logging and in-memory action ledger.
 /// </summary>
-public class TelemetryService
+public class TelemetryService : IDisposable
 {
     private readonly IActivityManager _activityManager;
     private readonly ILogger<TelemetryService> _logger;
+    private readonly Timer _debounceSaveTimer;
+    private bool _disposed;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TelemetryService"/> class.
@@ -26,6 +29,51 @@ public class TelemetryService
     {
         _activityManager = activityManager;
         _logger = logger;
+        _debounceSaveTimer = new Timer(OnDebounceSaveElapsed, null, Timeout.Infinite, Timeout.Infinite);
+    }
+
+    private void OnDebounceSaveElapsed(object? state)
+    {
+        try
+        {
+            Plugin.Instance?.SaveConfiguration();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "QuickSTRM: Debounced SaveConfiguration failed");
+        }
+    }
+
+    private void TriggerDebouncedSave()
+    {
+        try
+        {
+            // Debounce for 3 seconds so rapid ledger entries batch into a single disk write
+            _debounceSaveTimer.Change(TimeSpan.FromSeconds(3), Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Empties the action ledger and immediately persists the configuration.
+    /// </summary>
+    public void ClearLedger()
+    {
+        try
+        {
+            var config = Plugin.Instance?.Configuration;
+            if (config is not null)
+            {
+                config.ClearLedger();
+                Plugin.Instance?.SaveConfiguration();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "QuickSTRM: Failed to clear ledger");
+        }
     }
 
     /// <summary>
@@ -42,7 +90,7 @@ public class TelemetryService
             if (config is not null)
             {
                 config.AddLedgerEntry($"[{name}] {overview}");
-                Plugin.Instance?.SaveConfiguration();
+                TriggerDebouncedSave();
             }
 
             var entry = new ActivityLog(name, "QuickSTRM", Guid.Empty)
@@ -86,5 +134,16 @@ public class TelemetryService
             ? LogLevel.Error
             : LogLevel.Information;
         return LogEventAsync(name, details, severity);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _debounceSaveTimer.Dispose();
     }
 }

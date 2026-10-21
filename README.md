@@ -86,6 +86,21 @@ If an upstream cloud mount (Rclone, Google Drive, WebDAV) drops, probing hundred
 
 ---
 
+## 📱 Client Compatibility (Moonfin, Astra & Fire TV)
+
+QuickSTRM provides dedicated, first-class compatibility and playback acceleration for modern Jellyfin client applications, with specialized optimizations for **Moonfin** (iOS / Apple TV / macOS) and **Astra** (Amazon Fire TV / Android TV / Google TV):
+
+### Full Support for Moonfin and Astra
+* **Universal Endpoint Route Matching**: Jellyfin 12.x and next-generation native clients like Moonfin navigate item hierarchies using both legacy user-scoped endpoints (`/Users/{userId}/Items/{itemId}`) and modern direct endpoints (`/Items/{itemId}`). QuickSTRM's `PredictivePrewarmMiddleware` utilizes a unified, pre-compiled route regex:
+  ```regex
+  ^/(?:Users/[^/]+/)?Items/([0-9a-fA-F]{8}-?(?:[0-9a-fA-F]{4}-?){3}[0-9a-fA-F]{12})$
+  ```
+  This ensures predictive VFS pre-warming triggers reliably across Moonfin, Astra, Jellyfin Media Player, and web clients alike, while strictly filtering on `GET` requests to prevent false triggers during item metadata updates.
+* **FFmpeg User-Agent Impersonation (`Lavf/60.3.100`)**: Remote CDNs, debrid providers, and cloud storage gateways often handle generic HTTP clients differently than FFmpeg, occasionally rejecting standard HEAD requests or imposing distinct redirect paths. QuickSTRM dispatches redirect pre-resolution checks using the exact `User-Agent: Lavf/60.3.100` header expected by Jellyfin's transcoding and remuxing engine, ensuring the pre-resolved URL is 100% identical to what FFmpeg negotiates.
+* **Bypassing Audio Remux Lockups on Constrained Hosts**: On hardware-constrained host processors (such as Intel Core i3 or Celeron nodes), spinning up an inline `ffprobe` process concurrently with Jellyfin's `ffmpeg` audio remuxing pipeline causes severe CPU thread starvation and mount deadlock. QuickSTRM's `MediaSourceInterceptor` immediately returns cached `MediaSourceInfo` whenever cached audio and video streams exist in the database, explicitly ensuring `SupportsDirectPlay = true`, `SupportsDirectStream = true`, and `SupportsTranscoding = true`. Concurrently, `ProbeService` coalesces in-flight probe tasks across concurrent requests, completely eliminating remux lockups and player freeze on Moonfin and Astra endpoints.
+
+---
+
 ## 🎯 Architecture & Playback Flow
 
 ```text
