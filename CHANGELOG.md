@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [3.1.0] - 2026-10-21
+
+### ⚡ Schema-Driven *arr v3/v4 Webhook Provisioning, Per-Instance Diagnostics & Tabbed Dashboard UI
+
+Major release delivering schema-driven webhook payload construction for Radarr and Sonarr v3/v4 (eliminating `ControllerActionInvoker` 500 errors), per-instance sync diagnostics and error sanitization, Docker callback loopback conflict detection, and a modern 3-tab enterprise dashboard layout.
+
+### Fixed
+- **Schema-Driven *arr Webhook Provisioning (Resolves `ControllerActionInvoker` 500)**:
+  - Dynamically queries `/api/v3/notification/schema` to construct exact, engine-compatible webhook payloads for Radarr, Sonarr, and Whisparr.
+  - Automatically filters out incompatible foreign notification event properties (`onSeriesDelete`, `onEpisodeFileDelete` for Radarr/Whisparr; `onMovieDelete`, `onMovieFileDelete` for Sonarr) that caused ASP.NET Core `ControllerActionInvoker` model validation exceptions.
+  - Existing webhooks (`PUT /api/v3/notification/{id}`) now preserve all original schema fields (`username`, `password`, root `id`) while surgically mutating target callback parameters and event triggers.
+- **Sanitized Error Diagnostics & Stack-Trace Stripping**:
+  - Implemented `ParseArrErrorMessage` to strip ASP.NET Core stack traces (`at Microsoft.AspNetCore...`) and raw HTML error pages, delivering concise, single-sentence diagnostic summaries directly on instance cards.
+
+### Added
+- **Segmented 3-Tab Enterprise Dashboard UI**:
+  - Reorganized plugin configuration into three dedicated views: **Overview & Probing**, ***arr Integrations**, and **Maintenance & Advanced**.
+  - Modern pill-tab navigation with persistent state and responsive layout adjustments.
+- **Per-Instance Diagnostics & Granular Controls**:
+  - Added color-coded service badges (Radarr: Blue, Sonarr: Cyan, Whisparr: Purple), dynamic connection status indicators (`SYNCED #ID`, `SYNC FAILED`), and inline diagnostic callouts displaying `LastSyncError`.
+  - Added dedicated per-card **Sync / Test** button invoking `/QuickStrm/Arr/SyncInstance/{index}` with inline loading spinners for immediate per-instance verification.
+- **Docker Localhost / Loopback Conflict Detection**:
+  - Added automatic heuristic warnings when Jellyfin internal callback URL uses `localhost` or `127.0.0.1` while *arr services reside on external or container hostnames.
+  - Auto-formats and trims URLs on blur (`http://` prefix prepending and trailing slash trimming).
+
 ## [3.0.2] - 2026-10-25
 
 ### 🛡️ Checksum Integrity Hardening & Version-Pinned Release Pipeline

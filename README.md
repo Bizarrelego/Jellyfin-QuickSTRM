@@ -9,14 +9,14 @@
 </p>
 
 <p align="center">
-  <strong>QuickSTRM v3.0.2 — The Definitive Zero-Touch Orchestration Suite, Predictive Pre-Warmer, and Autonomous Auto-Healing Pipeline for Cloud-Mounted .STRM Libraries on Jellyfin 12.2+.</strong>
+  <strong>QuickSTRM v3.1.0 — The Definitive Zero-Touch Orchestration Suite, Predictive Pre-Warmer, and Autonomous Auto-Healing Pipeline for Cloud-Mounted .STRM Libraries on Jellyfin 12.2+.</strong>
 </p>
 
 ---
 
 ## ⚡ Overview & Core Pitch
 
-**QuickSTRM v3.0.2** is the definitive zero-touch `.strm` orchestration suite, playback acceleration engine, and automated maintenance system engineered natively for **Jellyfin 12.2+** on **.NET 10.0**.
+**QuickSTRM v3.1.0** is the definitive zero-touch `.strm` orchestration suite, playback acceleration engine, and automated maintenance system engineered natively for **Jellyfin 12.2+** on **.NET 10.0**.
 
 Managing cloud-mounted media libraries (such as Rclone, InfiniDysk, Google Drive, or WebDAV mounts) traditionally introduces crippling latency, dropped streams, and constant administrative intervention. Remote media links expire or 404, cloud mount spin-up times leave clients hanging on indefinite loading spinners, background trickplay extractors thrash network bandwidth, and concurrent webhook floods lock SQLite databases.
 
@@ -192,26 +192,48 @@ QuickSTRM eliminates this bottleneck:
 
 QuickSTRM integrates directly into the native Jellyfin administrator dashboard and elevates to the main sidebar menu with a dedicated Material Design `bolt` icon.
 
-### 1-Click Zero-Touch Setup
+### Modern Segmented 3-Tab Enterprise Dashboard
+
+QuickSTRM v3.1.0 introduces a modern, high-density tabbed administrative layout:
+
+1. **📊 Overview & Probing Tab**:
+   * **Real-Time Summary Metrics**: Instant visibility into total `.strm` files, probed streams, unprobed items, and cache efficiency.
+   * **Telemetry & Circuit Breaker**: Live monitoring of High/Low priority probe queues, active worker slots, negative cache depth, and circuit breaker trip states.
+   * **Background Probe Controller**: Trigger non-blocking **Incremental** (unprobed items only) or **Full** (library-wide re-probe) passes with real-time percentage progress bars and cancel controls.
+2. **🔌 *arr Integrations Tab**:
+   * **Enterprise Service Cards**: Color-coded badges for **Radarr** (Blue), **Sonarr** (Cyan), and **Whisparr** (Purple).
+   * **Connection Status Badges**: Real-time status pills displaying active webhook IDs (`SYNCED #12`) or sync failure states (`SYNC FAILED`).
+   * **Inline Diagnostics Callouts**: Instant, human-readable error summaries if connectivity or authentication fails (with ASP.NET Core stack traces automatically stripped).
+   * **1-Click Per-Card Sync & Test**: Test and provision individual instances directly from their cards without full-suite re-syncing.
+   * **Docker Loopback Conflict Warning**: Automatic heuristic alert if your Jellyfin internal URL is configured with `localhost` or `127.0.0.1` while *arr services run on external or container network hostnames.
+3. **🛠️ Maintenance & Advanced Tab**:
+   * **Streaming Diagnostics & Cache Control**: Flush negative probe caches to retry previously failed streams.
+   * **Bulk URL Rewrite Utility**: Safely migrate upstream CDN endpoints or credentials across all library `.strm` files in bulk with dry-run verification.
+   * **Live "Recent Actions" Ledger**: Live-scrolling event log tracking auto-heals, circuit breaker transitions, and webhook synchronizations.
+
+### 1-Click Zero-Touch *arr Setup
 
 1. Open your Jellyfin Web Client and click the **QuickSTRM** tab in the sidebar navigation menu (or navigate to **Dashboard -> QuickSTRM**).
-2. Under **Zero-Touch \*arr Suite Integration**, click **+ Add Instance**.
+2. Switch to the ***arr Integrations** tab and click **+ Add Instance**.
 3. Fill in your instance details:
    * **Instance Name**: e.g., `Radarr 4K` or `Sonarr TV`
    * **Application Type**: Select `Radarr`, `Sonarr`, or `Whisparr`
-   * **Base URL**: e.g., `http://192.168.1.50:7878` or `http://sonarr:8989` (trailing slashes are automatically sanitized)
+   * **Base URL**: e.g., `http://192.168.1.50:7878` or `http://sonarr:8989` (trailing slashes and URL formatting are automatically handled)
    * **API Key**: Found in your \*arr instance under *Settings -> General -> Security*
    * **Remote Path (\*arr)** & **Local Path (Jellyfin)**: Leave blank if your \*arr container and Jellyfin container share the exact same volume mounts.
    * **Auto-Heal on 404**: Checked by default to enable automatic dead link replacement.
-4. Click **Test Connection** adjacent to the API Key field to perform an immediate, non-mutating live connectivity check against the \*arr API.
-5. Click **Save Connection**. QuickSTRM will automatically save the configuration, connect to the instance, and provision a secured webhook notification named `QuickSTRM Auto-Sync` with an auto-generated cryptographic security query token (`?token={WebhookSecret}`).
-6. The instance will display an active **Synced** status badge in green.
+4. Click **Test Connection** to perform an immediate, non-mutating live connectivity check against the \*arr API.
+5. Click **Save Connection**. QuickSTRM dynamically negotiates the schema (`GET /api/v3/notification/schema`), generates an exact engine-compatible payload (eliminating `ControllerActionInvoker` 500 exceptions in v3/v4), and provisions a secured webhook named `QuickSTRM Auto-Sync` with an auto-generated cryptographic token (`?token={WebhookSecret}`).
+6. The instance card will instantly reflect an active **Synced** status pill.
+
+### Docker Container Networking & Localhost Warnings
+When Jellyfin and \*arr services run inside Docker containers, configuring `Jellyfin Internal / Host URL` as `http://localhost:8096` or `http://127.0.0.1:8096` causes webhook callbacks from the \*arr container to fail, because `localhost` inside the \*arr container resolves to itself, not Jellyfin. QuickSTRM's UI automatically detects this configuration mismatch and provides an immediate warning banner with actionable remediation advice (e.g. using `http://jellyfin:8096` or host IP).
 
 ### Editing Existing Connections
-Click the **Edit** button on any configured instance card to load its parameters into the form, make changes, and click **Update Connection** to commit updates in-place.
+Click the **Edit** button on any configured instance card to load its parameters into the slide-over drawer, make adjustments, and click **Update Connection** to commit updates in-place.
 
 ### Monitoring via the "Recent Actions" Ledger
-Scroll down to the **Recent Actions** section in the dashboard to inspect a live, scrolling ledger of the last 100 system events:
+Switch to the **Maintenance & Advanced** tab to inspect a live, scrolling ledger of the last 100 system events:
 * **STRM Auto-Heal Events**: Highlighted with purged file paths and item titles.
 * **Circuit Breaker Transitions**: Clear timestamps indicating `Tripped` or `Reset` states and cooldown remaining.
 * **Manual Refresh**: Click **Refresh Ledger** at any time to pull the latest state directly from `GET /QuickStrm/Ledger`.
@@ -288,6 +310,7 @@ All administrative endpoints require Jellyfin administrator privileges (`Require
 | `POST` | `/QuickStrm/Probe/Stop` | Admin | Stops an active library probe task. |
 | `POST` | `/QuickStrm/Arr/TestConnection` | Admin | Performs an isolated, live connectivity test against a single \*arr instance without saving or provisioning. |
 | `POST` | `/QuickStrm/Arr/TestAndSync` | Admin | Manually tests connections and provisions/updates webhooks across all configured \*arr instances. |
+| `POST` | `/QuickStrm/Arr/SyncInstance/{index}` | Admin | Manually tests connection and provisions/updates webhooks for a specific \*arr instance. |
 | `POST` | `/QuickStrm/Arr/WipeWebhooks` | Admin | Cleanly deletes all QuickSTRM webhooks across all configured \*arr instances for a zero-footprint uninstall. |
 | `POST` | `/QuickStrm/Tools/RewriteUrls` | Admin | Bulk rewrites target URL schemes across all `.strm` files (supports Dry Run preview). |
 | `POST` | `/QuickStrm/ArrWebhook` | Token (`?token=...`) | Receives incoming grab/download notifications from Radarr, Sonarr, and Whisparr with strict JSON schema validation. |

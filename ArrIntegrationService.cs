@@ -5,6 +5,8 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
@@ -101,19 +103,14 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
         var results = new List<ArrSyncResult>();
         var webhookSecret = config.WebhookSecret;
         var webhookUrl = $"{GetEffectiveJellyfinUrl()}/QuickStrm/ArrWebhook?token={webhookSecret}";
-        var modified = false;
 
         foreach (var instance in config.ArrInstances)
         {
             var result = await SyncSingleInstanceAsync(instance, webhookUrl, ct).ConfigureAwait(false);
             results.Add(result);
-            if (result.Success)
-            {
-                modified = true;
-            }
         }
 
-        if (modified && Plugin.Instance is not null)
+        if (Plugin.Instance is not null)
         {
             Plugin.Instance.SaveConfiguration();
         }
@@ -135,7 +132,6 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
 
         var webhookSecret = config.WebhookSecret;
         var webhookUrl = $"{GetEffectiveJellyfinUrl()}/QuickStrm/ArrWebhook?token={webhookSecret}";
-        var modified = false;
 
         foreach (var instance in config.ArrInstances)
         {
@@ -158,7 +154,6 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
                     var result = await SyncSingleInstanceAsync(instance, webhookUrl, ct).ConfigureAwait(false);
                     if (result.Success)
                     {
-                        modified = true;
                         _logger.LogInformation("QuickSTRM: Webhook synchronized for {Name} on attempt {Attempt}/{Max}", instance.Name, attempt, maxAttempts);
                         break;
                     }
@@ -203,21 +198,21 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
                 }
             }
         }
-
-        if (modified && Plugin.Instance is not null)
-        {
-            Plugin.Instance.SaveConfiguration();
-        }
     }
 
     /// <summary>
     /// Performs an immediate, single-attempt webhook synchronization for a single *arr instance.
+    /// Uses schema-driven template querying to eliminate foreign property validator crashes.
     /// </summary>
     public async Task<ArrSyncResult> SyncSingleInstanceAsync(ArrInstanceConfig config, string webhookUrl, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(config.BaseUrl) || string.IsNullOrWhiteSpace(config.ApiKey))
         {
-            return new ArrSyncResult(config.Name, false, "BaseUrl or ApiKey missing", null);
+            var missingMsg = "Base URL or API Key is missing.";
+            config.ProvisionedWebhookId = null;
+            config.LastSyncError = missingMsg;
+            Plugin.Instance?.SaveConfiguration();
+            return new ArrSyncResult(config.Name, false, missingMsg, null);
         }
 
         var cleanBaseUrl = config.BaseUrl.TrimEnd('/');
@@ -225,20 +220,26 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
         {
             // 1. Fetch existing notifications
             using var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{cleanBaseUrl}/api/v3/notification");
-            getRequest.Headers.Add("X-Api-Key", config.ApiKey);
+            getRequest.Headers.Add("X-Api-Key", config.ApiKey.Trim());
             getRequest.Headers.Add("Accept", "application/json");
 
             using var getResponse = await _httpClient.SendAsync(getRequest, ct).ConfigureAwait(false);
             if (!getResponse.IsSuccessStatusCode)
             {
-                return new ArrSyncResult(config.Name, false, $"HTTP {getResponse.StatusCode} retrieving notifications", null);
+                var errBody = await getResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var friendly = ParseArrErrorMessage(getResponse, errBody);
+                config.ProvisionedWebhookId = null;
+                config.LastSyncError = friendly;
+                Plugin.Instance?.SaveConfiguration();
+                return new ArrSyncResult(config.Name, false, friendly, null);
             }
 
             var jsonStr = await getResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(jsonStr);
 
             int? existingId = null;
-            string? existingUrl = null;
+            JsonObject? existingObj = null;
+
             foreach (var element in doc.RootElement.EnumerateArray())
             {
                 if (element.TryGetProperty("name", out var nameProp)
@@ -247,86 +248,367 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
                     if (element.TryGetProperty("id", out var idProp))
                     {
                         existingId = idProp.GetInt32();
-                        if (element.TryGetProperty("fields", out var fieldsProp) && fieldsProp.ValueKind == JsonValueKind.Array)
+                        try
                         {
-                            foreach (var field in fieldsProp.EnumerateArray())
-                            {
-                                if (field.TryGetProperty("name", out var fn) && string.Equals(fn.GetString(), "url", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    existingUrl = field.TryGetProperty("value", out var fv) ? fv.GetString() : null;
-                                    break;
-                                }
-                            }
+                            existingObj = JsonNode.Parse(element.GetRawText()) as JsonObject;
+                        }
+                        catch
+                        {
                         }
                         break;
                     }
                 }
             }
 
-            if (existingId.HasValue && string.Equals(existingUrl, webhookUrl, StringComparison.OrdinalIgnoreCase))
-            {
-                config.ProvisionedWebhookId = existingId.Value;
-                return new ArrSyncResult(config.Name, true, "Webhook already provisioned with security token", existingId.Value);
-            }
-
+            // 2. If existing webhook exists, perform schema-safe mutation and PUT /api/v3/notification/{id}
             if (existingId.HasValue)
             {
-                // Existing webhook is missing token or has an outdated URL; remove it before provisioning the update
-                using var delReq = new HttpRequestMessage(HttpMethod.Delete, $"{cleanBaseUrl}/api/v3/notification/{existingId.Value}");
-                delReq.Headers.Add("X-Api-Key", config.ApiKey);
-                delReq.Headers.Add("Accept", "application/json");
-                await _httpClient.SendAsync(delReq, ct).ConfigureAwait(false);
-                _logger.LogInformation("QuickSTRM: Cleaned up outdated webhook #{Id} on {Name} to upgrade with security token", existingId.Value, config.Name);
+                JsonObject? targetObj = null;
+                try
+                {
+                    using var getSingleReq = new HttpRequestMessage(HttpMethod.Get, $"{cleanBaseUrl}/api/v3/notification/{existingId.Value}");
+                    getSingleReq.Headers.Add("X-Api-Key", config.ApiKey.Trim());
+                    getSingleReq.Headers.Add("Accept", "application/json");
+                    using var getSingleResp = await _httpClient.SendAsync(getSingleReq, ct).ConfigureAwait(false);
+                    if (getSingleResp.IsSuccessStatusCode)
+                    {
+                        var singleJson = await getSingleResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                        targetObj = JsonNode.Parse(singleJson) as JsonObject;
+                    }
+                }
+                catch
+                {
+                }
+
+                targetObj ??= existingObj;
+                if (targetObj is not null)
+                {
+                    targetObj["id"] = existingId.Value;
+                    ApplyArrProperties(targetObj, config.ArrType);
+                    UpdateArrFields(targetObj, webhookUrl);
+
+                    using var putReq = new HttpRequestMessage(HttpMethod.Put, $"{cleanBaseUrl}/api/v3/notification/{existingId.Value}");
+                    putReq.Headers.Add("X-Api-Key", config.ApiKey.Trim());
+                    putReq.Headers.Add("Accept", "application/json");
+                    putReq.Content = new StringContent(targetObj.ToJsonString(), Encoding.UTF8, "application/json");
+
+                    using var putResp = await _httpClient.SendAsync(putReq, ct).ConfigureAwait(false);
+                    if (!putResp.IsSuccessStatusCode)
+                    {
+                        var putErr = await putResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                        var friendly = ParseArrErrorMessage(putResp, putErr);
+                        config.ProvisionedWebhookId = null;
+                        config.LastSyncError = friendly;
+                        Plugin.Instance?.SaveConfiguration();
+                        return new ArrSyncResult(config.Name, false, friendly, null);
+                    }
+
+                    config.ProvisionedWebhookId = existingId.Value;
+                    config.LastSyncError = string.Empty;
+                    config.LastSyncUtc = DateTime.UtcNow.ToString("o");
+                    Plugin.Instance?.SaveConfiguration();
+
+                    _logger.LogInformation("QuickSTRM: Updated and verified webhook #{Id} in {Name}", existingId.Value, config.Name);
+                    return new ArrSyncResult(config.Name, true, "Secured webhook updated and verified successfully", existingId.Value);
+                }
             }
 
-            // 2. Provision new webhook notification
-            var payload = new
+            // 3. Provision new webhook notification using schema template to avoid foreign property validation crashes
+            JsonObject? newPayload = null;
+
+            try
             {
-                name = WebhookNotificationName,
-                implementation = "Webhook",
-                configContract = "WebhookSettings",
-                onGrab = false,
-                onDownload = true,
-                onUpgrade = true,
-                onRename = true,
-                onMovieFileDelete = true,
-                onEpisodeFileDelete = true,
-                fields = new object[]
+                using var schemaReq = new HttpRequestMessage(HttpMethod.Get, $"{cleanBaseUrl}/api/v3/notification/schema");
+                schemaReq.Headers.Add("X-Api-Key", config.ApiKey.Trim());
+                schemaReq.Headers.Add("Accept", "application/json");
+
+                using var schemaResp = await _httpClient.SendAsync(schemaReq, ct).ConfigureAwait(false);
+                if (schemaResp.IsSuccessStatusCode)
                 {
-                    new { name = "url", value = webhookUrl },
-                    new { name = "method", value = 1 } // POST
+                    var schemaJson = await schemaResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    var schemaNode = JsonNode.Parse(schemaJson);
+                    if (schemaNode is JsonArray schemaArr)
+                    {
+                        foreach (var item in schemaArr)
+                        {
+                            if (item is JsonObject obj && obj.TryGetPropertyValue("implementation", out var implVal)
+                                && string.Equals(implVal?.ToString(), "Webhook", StringComparison.OrdinalIgnoreCase))
+                            {
+                                newPayload = JsonNode.Parse(obj.ToJsonString()) as JsonObject;
+                                break;
+                            }
+                        }
+                    }
                 }
-            };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "QuickSTRM: Could not retrieve notification schema from {Name}, falling back to manual template", config.Name);
+            }
+
+            if (newPayload is null)
+            {
+                newPayload = new JsonObject
+                {
+                    ["name"] = WebhookNotificationName,
+                    ["implementation"] = "Webhook",
+                    ["configContract"] = "WebhookSettings",
+                    ["fields"] = new JsonArray
+                    {
+                        new JsonObject { ["name"] = "url", ["value"] = webhookUrl },
+                        new JsonObject { ["name"] = "method", ["value"] = 1 }
+                    }
+                };
+            }
+
+            ApplyArrProperties(newPayload, config.ArrType);
+            UpdateArrFields(newPayload, webhookUrl);
 
             using var postRequest = new HttpRequestMessage(HttpMethod.Post, $"{cleanBaseUrl}/api/v3/notification");
-            postRequest.Headers.Add("X-Api-Key", config.ApiKey);
+            postRequest.Headers.Add("X-Api-Key", config.ApiKey.Trim());
             postRequest.Headers.Add("Accept", "application/json");
-            postRequest.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+            postRequest.Content = new StringContent(newPayload.ToJsonString(), Encoding.UTF8, "application/json");
 
             using var postResponse = await _httpClient.SendAsync(postRequest, ct).ConfigureAwait(false);
             if (!postResponse.IsSuccessStatusCode)
             {
                 var err = await postResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                return new ArrSyncResult(config.Name, false, $"HTTP {postResponse.StatusCode}: {err}", null);
+                var friendly = ParseArrErrorMessage(postResponse, err);
+                config.ProvisionedWebhookId = null;
+                config.LastSyncError = friendly;
+                Plugin.Instance?.SaveConfiguration();
+                return new ArrSyncResult(config.Name, false, friendly, null);
             }
 
             var postJson = await postResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             using var createdDoc = JsonDocument.Parse(postJson);
+            int? newId = null;
             if (createdDoc.RootElement.TryGetProperty("id", out var newIdProp))
             {
-                var newId = newIdProp.GetInt32();
-                config.ProvisionedWebhookId = newId;
-                _logger.LogInformation("QuickSTRM: Successfully auto-provisioned secured webhook #{Id} in {Name}", newId, config.Name);
-                return new ArrSyncResult(config.Name, true, "Secured webhook provisioned successfully", newId);
+                newId = newIdProp.GetInt32();
             }
 
-            return new ArrSyncResult(config.Name, true, "Secured webhook created (no ID returned)", null);
+            config.ProvisionedWebhookId = newId;
+            config.LastSyncError = string.Empty;
+            config.LastSyncUtc = DateTime.UtcNow.ToString("o");
+            Plugin.Instance?.SaveConfiguration();
+
+            _logger.LogInformation("QuickSTRM: Successfully auto-provisioned secured webhook #{Id} in {Name}", newId, config.Name);
+            return new ArrSyncResult(config.Name, true, "Secured webhook provisioned successfully", newId);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "QuickSTRM: Failed to sync webhook for {Name} at {BaseUrl}", config.Name, cleanBaseUrl);
-            return new ArrSyncResult(config.Name, false, ex.Message, null);
+            var friendly = ex is HttpRequestException or SocketException
+                ? $"Could not reach {cleanBaseUrl} — verify container network or port ({ex.Message})"
+                : ex.Message;
+            config.ProvisionedWebhookId = null;
+            config.LastSyncError = friendly;
+            Plugin.Instance?.SaveConfiguration();
+            return new ArrSyncResult(config.Name, false, friendly, null);
         }
+    }
+
+    /// <summary>
+    /// Applies event booleans to a webhook notification payload, explicitly stripping foreign properties
+    /// to avoid Radarr/Sonarr strict validator exceptions (e.g. ControllerActionInvoker 500).
+    /// </summary>
+    private static void ApplyArrProperties(JsonObject obj, ArrType arrType)
+    {
+        obj["name"] = WebhookNotificationName;
+        obj["onGrab"] = false;
+        obj["onDownload"] = true;
+        obj["onUpgrade"] = true;
+        obj["onRename"] = true;
+        obj["onHealthIssue"] = false;
+
+        if (arrType == ArrType.Sonarr)
+        {
+            obj["onSeriesDelete"] = true;
+            obj["onEpisodeFileDelete"] = true;
+            obj.Remove("onMovieDelete");
+            obj.Remove("onMovieFileDelete");
+        }
+        else
+        {
+            // Radarr and Whisparr
+            obj["onMovieDelete"] = true;
+            obj["onMovieFileDelete"] = true;
+            obj.Remove("onSeriesDelete");
+            obj.Remove("onEpisodeFileDelete");
+        }
+    }
+
+    /// <summary>
+    /// Mutates the 'url' and 'method' entries in a notification's fields array, preserving all other fields.
+    /// </summary>
+    private static void UpdateArrFields(JsonObject obj, string webhookUrl)
+    {
+        if (obj["fields"] is not JsonArray fieldsArray)
+        {
+            fieldsArray = new JsonArray();
+            obj["fields"] = fieldsArray;
+        }
+
+        JsonObject? urlField = null;
+        JsonObject? methodField = null;
+
+        foreach (var node in fieldsArray)
+        {
+            if (node is JsonObject fieldObj && fieldObj.TryGetPropertyValue("name", out var nameVal) && nameVal != null)
+            {
+                var nameStr = nameVal.ToString();
+                if (string.Equals(nameStr, "url", StringComparison.OrdinalIgnoreCase))
+                {
+                    urlField = fieldObj;
+                }
+                else if (string.Equals(nameStr, "method", StringComparison.OrdinalIgnoreCase))
+                {
+                    methodField = fieldObj;
+                }
+            }
+        }
+
+        if (urlField is not null)
+        {
+            urlField["value"] = webhookUrl;
+        }
+        else
+        {
+            fieldsArray.Add(new JsonObject { ["name"] = "url", ["value"] = webhookUrl });
+        }
+
+        if (methodField is not null)
+        {
+            methodField["value"] = 1; // POST
+        }
+        else
+        {
+            fieldsArray.Add(new JsonObject { ["name"] = "method", ["value"] = 1 });
+        }
+    }
+
+    /// <summary>
+    /// Parses JSON error responses from Radarr/Sonarr/Whisparr and strips out raw C# stack traces,
+    /// returning a clean, concise, 1-sentence diagnostic explanation.
+    /// </summary>
+    public static string ParseArrErrorMessage(HttpResponseMessage response, string rawBody)
+    {
+        var statusPrefix = $"HTTP {(int)response.StatusCode}";
+        if (string.IsNullOrWhiteSpace(rawBody))
+        {
+            return !string.IsNullOrWhiteSpace(response.ReasonPhrase)
+                ? $"{statusPrefix}: {response.ReasonPhrase}"
+                : statusPrefix;
+        }
+
+        string? extracted = null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawBody);
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                var errList = new List<string>();
+                foreach (var item in root.EnumerateArray())
+                {
+                    if (item.TryGetProperty("errorMessage", out var em) && !string.IsNullOrWhiteSpace(em.GetString()))
+                    {
+                        var prop = item.TryGetProperty("propertyName", out var pn) ? pn.GetString() : null;
+                        errList.Add(!string.IsNullOrWhiteSpace(prop) ? $"{prop}: {em.GetString()}" : em.GetString()!);
+                    }
+                    else if (item.TryGetProperty("message", out var m) && !string.IsNullOrWhiteSpace(m.GetString()))
+                    {
+                        errList.Add(m.GetString()!);
+                    }
+                }
+                if (errList.Count > 0)
+                {
+                    extracted = string.Join("; ", errList);
+                }
+            }
+            else if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("errorMessage", out var em) && !string.IsNullOrWhiteSpace(em.GetString()))
+                {
+                    extracted = em.GetString();
+                }
+                else if (root.TryGetProperty("message", out var m) && !string.IsNullOrWhiteSpace(m.GetString()))
+                {
+                    extracted = m.GetString();
+                }
+                else if (root.TryGetProperty("errors", out var errs))
+                {
+                    if (errs.ValueKind == JsonValueKind.Object)
+                    {
+                        var errList = new List<string>();
+                        foreach (var prop in errs.EnumerateObject())
+                        {
+                            if (prop.Value.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var item in prop.Value.EnumerateArray())
+                                {
+                                    errList.Add($"{prop.Name}: {item.GetString()}");
+                                }
+                            }
+                            else
+                            {
+                                errList.Add($"{prop.Name}: {prop.Value.GetString()}");
+                            }
+                        }
+                        if (errList.Count > 0)
+                        {
+                            extracted = string.Join("; ", errList);
+                        }
+                    }
+                }
+                else if (root.TryGetProperty("title", out var title) && !string.IsNullOrWhiteSpace(title.GetString()))
+                {
+                    extracted = title.GetString();
+                }
+            }
+        }
+        catch
+        {
+            // Non-JSON content
+        }
+
+        var text = extracted ?? rawBody;
+
+        // Strip C# stack traces (at Microsoft.AspNetCore..., --- End of stack trace..., etc.)
+        var lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+        var cleanLines = new List<string>();
+
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("at ", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("--- End of", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("Microsoft.AspNetCore", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("NzbDrone.", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("System.", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains("ControllerActionInvoker", StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+
+            cleanLines.Add(trimmed);
+        }
+
+        var cleanMessage = cleanLines.Count > 0 ? string.Join(" ", cleanLines) : response.ReasonPhrase ?? "Unknown error";
+        if (cleanMessage.Contains("   at "))
+        {
+            cleanMessage = cleanMessage.Substring(0, cleanMessage.IndexOf("   at ", StringComparison.Ordinal)).Trim();
+        }
+
+        if (cleanMessage.Length > 250)
+        {
+            cleanMessage = cleanMessage.Substring(0, 247) + "...";
+        }
+
+        return $"{statusPrefix}: {cleanMessage}";
     }
 
     /// <summary>
@@ -353,9 +635,8 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
             var cleanBaseUrl = instance.BaseUrl.TrimEnd('/');
             try
             {
-                // First check if a notification named "QuickSTRM Auto-Sync" exists to be 100% sure we clean it up
                 using var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{cleanBaseUrl}/api/v3/notification");
-                getRequest.Headers.Add("X-Api-Key", instance.ApiKey);
+                getRequest.Headers.Add("X-Api-Key", instance.ApiKey.Trim());
                 getRequest.Headers.Add("Accept", "application/json");
 
                 using var getResponse = await _httpClient.SendAsync(getRequest, ct).ConfigureAwait(false);
@@ -373,7 +654,7 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
                             {
                                 var id = idProp.GetInt32();
                                 using var deleteRequest = new HttpRequestMessage(HttpMethod.Delete, $"{cleanBaseUrl}/api/v3/notification/{id}");
-                                deleteRequest.Headers.Add("X-Api-Key", instance.ApiKey);
+                                deleteRequest.Headers.Add("X-Api-Key", instance.ApiKey.Trim());
                                 deleteRequest.Headers.Add("Accept", "application/json");
                                 await _httpClient.SendAsync(deleteRequest, ct).ConfigureAwait(false);
                                 _logger.LogInformation("QuickSTRM: Cleanly removed webhook #{Id} from {Name}", id, instance.Name);
@@ -383,6 +664,8 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
                 }
 
                 instance.ProvisionedWebhookId = null;
+                instance.LastSyncError = string.Empty;
+                instance.LastSyncUtc = string.Empty;
                 modified = true;
                 results.Add(new ArrSyncResult(instance.Name, true, "Cleaned up all webhooks", null));
             }
@@ -442,12 +725,9 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
                 }
             }
 
-            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-            {
-                return (false, $"Authentication failed (HTTP {(int)response.StatusCode}). Please verify your API Key.");
-            }
-
-            return (false, $"Server returned HTTP {(int)response.StatusCode} ({response.ReasonPhrase}).");
+            var errBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var friendly = ParseArrErrorMessage(response, errBody);
+            return (false, friendly);
         }
         catch (HttpRequestException ex)
         {

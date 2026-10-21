@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -454,7 +455,56 @@ public class QuickStrmController : ControllerBase
     public async Task<ActionResult> TestAndSyncArr()
     {
         var results = await _arrIntegrationService.SyncWebhooksAsync().ConfigureAwait(false);
-        return Ok(results);
+        var config = Plugin.Instance?.Configuration;
+        var instances = config?.ArrInstances ?? new List<ArrInstanceConfig>();
+
+        return Ok(new
+        {
+            SyncedCount = instances.Count(i => i.ProvisionedWebhookId.HasValue),
+            TotalCount = instances.Count,
+            Results = instances.Select(i => new
+            {
+                i.Name,
+                Synced = i.ProvisionedWebhookId.HasValue,
+                i.ProvisionedWebhookId,
+                i.LastSyncError,
+                i.LastSyncUtc
+            })
+        });
+    }
+
+    /// <summary>
+    /// Synchronizes and tests a single configured *arr instance by zero-based index.
+    /// Allows 1-click sync/test directly from the instance card on the dashboard without opening the edit form.
+    /// </summary>
+    [HttpPost("Arr/SyncInstance/{index}")]
+    [Authorize(Policy = "RequiresElevation")]
+    public async Task<ActionResult> SyncArrInstance([FromRoute] int index, CancellationToken ct)
+    {
+        var config = Plugin.Instance?.Configuration;
+        if (config is null || index < 0 || index >= config.ArrInstances.Count)
+        {
+            return NotFound(new { Message = $"Arr instance at index {index} not found." });
+        }
+
+        var instance = config.ArrInstances[index];
+        var webhookUrl = $"{_arrIntegrationService.GetEffectiveJellyfinUrl()}/QuickStrm/ArrWebhook?token={config.WebhookSecret}";
+
+        var result = await _arrIntegrationService.SyncSingleInstanceAsync(instance, webhookUrl, ct).ConfigureAwait(false);
+
+        return Ok(new
+        {
+            Success = result.Success,
+            Message = result.Message,
+            Instance = new
+            {
+                instance.Name,
+                Synced = instance.ProvisionedWebhookId.HasValue,
+                instance.ProvisionedWebhookId,
+                instance.LastSyncError,
+                instance.LastSyncUtc
+            }
+        });
     }
 
     /// <summary>

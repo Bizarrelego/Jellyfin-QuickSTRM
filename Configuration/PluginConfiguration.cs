@@ -42,6 +42,12 @@ public class ArrInstanceConfig
 
     /// <summary>Gets or sets the webhook ID provisioned in the *arr instance, or null if not yet provisioned.</summary>
     public int? ProvisionedWebhookId { get; set; }
+
+    /// <summary>Gets or sets the last synchronization error message, or empty if successful.</summary>
+    public string LastSyncError { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the UTC timestamp of the last successful synchronization in ISO 8601 format.</summary>
+    public string LastSyncUtc { get; set; } = string.Empty;
 }
 
 /// <summary>

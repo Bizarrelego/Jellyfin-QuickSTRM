@@ -1,6 +1,48 @@
 <div id="QuickStrmConfigurationPage" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/QuickSTRM.js">
-    <div class="content-primary" style="max-width: 960px; margin: 0 auto; padding: 1.5em 1em;">
+    <div class="content-primary" style="max-width: 980px; margin: 0 auto; padding: 1.5em 1em;">
         <style>
+            .quickstrm-tab-bar {
+                display: flex;
+                gap: 0.6em;
+                margin-bottom: 1.8em;
+                border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));
+                padding-bottom: 0.8em;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+            }
+            .quickstrm-tab-bar::-webkit-scrollbar {
+                display: none;
+            }
+
+            .quickstrm-tab-btn {
+                background: var(--card-background, rgba(255, 255, 255, 0.04));
+                border: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));
+                border-radius: 20px;
+                padding: 0.55em 1.25em;
+                font-size: 0.9em;
+                font-weight: 600;
+                color: var(--text-muted-color, #aaa);
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5em;
+                white-space: nowrap;
+                transition: all 0.2s ease;
+                outline: none;
+            }
+            .quickstrm-tab-btn:hover {
+                background: rgba(255, 255, 255, 0.08);
+                color: var(--text-color, #fff);
+                transform: translateY(-1px);
+            }
+            .quickstrm-tab-btn.active {
+                background: var(--theme-primary-color, #00a4dc);
+                color: #fff;
+                border-color: var(--theme-primary-color, #00a4dc);
+                box-shadow: 0 2px 10px rgba(0, 164, 220, 0.35);
+            }
+
             .quickstrm-metrics-grid {
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
@@ -19,7 +61,6 @@
                 box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
                 transition: transform 0.2s ease, box-shadow 0.2s ease;
             }
-
             .quickstrm-metric-card:hover {
                 transform: translateY(-2px);
                 box-shadow: 0 4px 8px rgba(0, 0, 0, 0.25);
@@ -51,21 +92,22 @@
             }
 
             .quickstrm-arr-card {
-                background: var(--card-background, rgba(255, 255, 255, 0.02));
+                background: var(--card-background, rgba(255, 255, 255, 0.03));
                 border: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));
                 border-radius: 8px;
-                padding: 1em 1.2em;
-                margin-bottom: 0.8em;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                flex-wrap: wrap;
-                gap: 0.8em;
+                padding: 1.2em;
+                margin-bottom: 1em;
+                transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            }
+            .quickstrm-arr-card:hover {
+                border-color: rgba(255, 255, 255, 0.16);
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
             }
 
-            .quickstrm-badge,
-            .badge.sync-status {
-                display: inline-block;
+            .quickstrm-badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.3em;
                 padding: 0.25em 0.65em;
                 border-radius: 4px;
                 font-size: 0.75em;
@@ -74,25 +116,79 @@
                 letter-spacing: 0.03em;
             }
 
-            .badge.sync-status.synced,
-            .quickstrm-badge-green {
+            .quickstrm-badge-green,
+            .badge.sync-status.synced {
                 background: rgba(76, 175, 80, 0.2);
                 color: #81c784;
                 border: 1px solid #4caf50;
             }
 
-            .badge.sync-status.unsynced,
-            .quickstrm-badge-red {
+            .quickstrm-badge-red,
+            .badge.sync-status.unsynced {
                 background: rgba(244, 67, 54, 0.2);
                 color: #e57373;
                 border: 1px solid #f44336;
             }
 
-            .quickstrm-badge-type {
+            .quickstrm-badge-radarr {
                 background: rgba(33, 150, 243, 0.15);
                 color: #64b5f6;
                 border: 1px solid #2196f3;
-                margin-left: 0.4em;
+            }
+            .quickstrm-badge-sonarr {
+                background: rgba(0, 188, 212, 0.15);
+                color: #4dd0e1;
+                border: 1px solid #00bcd4;
+            }
+            .quickstrm-badge-whisparr {
+                background: rgba(156, 39, 176, 0.15);
+                color: #ba68c8;
+                border: 1px solid #9c27b0;
+            }
+
+            .quickstrm-card-error-callout {
+                margin-top: 0.9em;
+                padding: 0.75em 1em;
+                background: rgba(244, 67, 54, 0.12);
+                border-left: 3px solid #f44336;
+                border-radius: 4px;
+                font-size: 0.85em;
+                color: #ffcdd2;
+                line-height: 1.4;
+            }
+
+            .quickstrm-warning-banner {
+                background: rgba(255, 152, 0, 0.15);
+                border: 1px solid #ff9800;
+                border-radius: 6px;
+                padding: 0.8em 1em;
+                margin-top: 0.8em;
+                margin-bottom: 1.2em;
+                color: #ffe0b2;
+                font-size: 0.88em;
+                display: flex;
+                align-items: center;
+                gap: 0.6em;
+            }
+
+            .quickstrm-inline-feedback {
+                margin-top: 1em;
+                padding: 0.8em 1em;
+                border-radius: 6px;
+                font-size: 0.88em;
+                display: flex;
+                align-items: center;
+                gap: 0.6em;
+            }
+            .quickstrm-inline-feedback.success {
+                background: rgba(76, 175, 80, 0.15);
+                border: 1px solid #4caf50;
+                color: #c8e6c9;
+            }
+            .quickstrm-inline-feedback.error {
+                background: rgba(244, 67, 54, 0.15);
+                border: 1px solid #f44336;
+                color: #ffcdd2;
             }
 
             .quickstrm-form-row {
@@ -102,31 +198,36 @@
                 margin-bottom: 1em;
             }
 
+            @keyframes quickstrm-spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            .quickstrm-spinner {
+                display: inline-block;
+                width: 14px;
+                height: 14px;
+                border: 2px solid rgba(255,255,255,0.3);
+                border-top-color: white;
+                border-radius: 50%;
+                animation: quickstrm-spin 0.8s linear infinite;
+                vertical-align: middle;
+                margin-right: 0.4em;
+            }
+
             @keyframes quickstrm-indeterminate {
-                0% {
-                    transform: translateX(-100%);
-                    width: 30%;
-                }
-                50% {
-                    transform: translateX(100%);
-                    width: 60%;
-                }
-                100% {
-                    transform: translateX(350%);
-                    width: 30%;
-                }
+                0% { transform: translateX(-100%); width: 30%; }
+                50% { transform: translateX(100%); width: 60%; }
+                100% { transform: translateX(350%); width: 30%; }
             }
 
             .taskProgress {
                 position: relative;
                 overflow: hidden;
             }
-
             .taskProgressInner {
                 transition: width 0.25s ease;
                 transform: none;
             }
-
             .taskProgressInner.indeterminate {
                 width: 30% !important;
                 animation: quickstrm-indeterminate 1.5s infinite linear;
@@ -136,23 +237,18 @@
                 .quickstrm-metrics-grid {
                     grid-template-columns: 1fr;
                 }
-                .quickstrm-arr-card {
-                    flex-direction: column;
-                    align-items: flex-start;
-                }
                 .quickstrm-form-row {
                     grid-template-columns: 1fr;
                     gap: 0.8em;
                 }
-                .paperList {
-                    margin-left: 0 !important;
-                    margin-right: 0 !important;
-                    padding: 1em !important;
+                .quickstrm-card-header {
+                    flex-direction: column;
+                    align-items: flex-start !important;
                 }
-                .paperList button,
-                .paperList .emby-button {
+                .quickstrm-card-actions {
                     width: 100%;
-                    box-sizing: border-box;
+                    margin-top: 0.8em;
+                    justify-content: flex-start !important;
                 }
             }
         </style>
@@ -164,6 +260,7 @@
                     <h2 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">bolt</span>
                         QuickSTRM Management Suite
+                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v3.1.0</span>
                     </h2>
                     <div style="font-size: 0.9em; color: var(--text-muted-color, #888); margin-top: 0.2em;">
                         Zero-Touch Playback Acceleration, *arr Orchestration &amp; Library Telemetry
@@ -172,7 +269,23 @@
             </div>
         </div>
 
-        <!-- Circuit Breaker Tripped Alert Banner (shown dynamically at top) -->
+        <!-- Segmented Pill-Tab Navigation Bar -->
+        <div class="quickstrm-tab-bar">
+            <button type="button" class="quickstrm-tab-btn active" data-tab="tab-overview">
+                <span class="material-icons" style="font-size: 1.1em;">dashboard</span>
+                <span>Overview &amp; Probing</span>
+            </button>
+            <button type="button" class="quickstrm-tab-btn" data-tab="tab-arr">
+                <span class="material-icons" style="font-size: 1.1em;">cloud_sync</span>
+                <span>*arr Integrations</span>
+            </button>
+            <button type="button" class="quickstrm-tab-btn" data-tab="tab-maintenance">
+                <span class="material-icons" style="font-size: 1.1em;">tune</span>
+                <span>Maintenance &amp; Advanced</span>
+            </button>
+        </div>
+
+        <!-- Circuit Breaker Tripped Alert Banner (Global) -->
         <div id="circuitBreakerBanner" class="paperList" style="display: none; background: rgba(183, 28, 28, 0.25); border: 1px solid #e53935; border-radius: 8px; padding: 1.2em; margin-bottom: 1.8em; color: #ffcdd2;">
             <div style="font-weight: 600; font-size: 1.05em; margin-bottom: 0.3em; display: flex; align-items: center; gap: 0.4em;">
                 <span class="material-icons" style="color: #ef5350;">warning</span>
@@ -188,234 +301,45 @@
             </div>
         </div>
 
-        <!-- 1. Live Telemetry Grid -->
-        <div class="quickstrm-metrics-grid">
-            <!-- Metric 1: Circuit State -->
-            <div class="quickstrm-metric-card">
-                <div class="quickstrm-metric-title">Circuit State</div>
-                <div id="metricCircuitState" class="quickstrm-metric-value" style="color: #4caf50;">Closed</div>
-                <div id="metricCircuitSub" class="quickstrm-metric-sub">Normal Operation</div>
+        <!-- ==================== TAB 1: OVERVIEW & PROBING ==================== -->
+        <div id="tab-overview" class="quickstrm-tab-content">
+            <!-- 1. Live Telemetry Grid -->
+            <div class="quickstrm-metrics-grid">
+                <!-- Metric 1: Circuit State -->
+                <div class="quickstrm-metric-card">
+                    <div class="quickstrm-metric-title">Circuit State</div>
+                    <div id="metricCircuitState" class="quickstrm-metric-value" style="color: #4caf50;">Closed</div>
+                    <div id="metricCircuitSub" class="quickstrm-metric-sub">Normal Operation</div>
+                </div>
+
+                <!-- Metric 2: Cooldown Timer -->
+                <div class="quickstrm-metric-card">
+                    <div class="quickstrm-metric-title">Cooldown Timer</div>
+                    <div id="metricCooldownTimer" class="quickstrm-metric-value">0:00</div>
+                    <div id="metricCooldownSub" class="quickstrm-metric-sub">Inactive</div>
+                </div>
+
+                <!-- Metric 3: Queue Depth (High / Low) -->
+                <div class="quickstrm-metric-card">
+                    <div class="quickstrm-metric-title">Queue Depth (High / Low)</div>
+                    <div id="metricQueueDepth" class="quickstrm-metric-value">0 / 0</div>
+                    <div id="metricQueueSub" class="quickstrm-metric-sub">0 High / 0 Low Lane</div>
+                </div>
+
+                <!-- Metric 4: Active Probes -->
+                <div class="quickstrm-metric-card">
+                    <div class="quickstrm-metric-title">Active Probes</div>
+                    <div id="metricActiveProbes" class="quickstrm-metric-value">0 / 2</div>
+                    <div id="metricActiveProbesSub" class="quickstrm-metric-sub">0 in cache</div>
+                </div>
             </div>
 
-            <!-- Metric 2: Cooldown Timer -->
-            <div class="quickstrm-metric-card">
-                <div class="quickstrm-metric-title">Cooldown Timer</div>
-                <div id="metricCooldownTimer" class="quickstrm-metric-value">0:00</div>
-                <div id="metricCooldownSub" class="quickstrm-metric-sub">Inactive</div>
-            </div>
-
-            <!-- Metric 3: Queue Depth (High / Low) -->
-            <div class="quickstrm-metric-card">
-                <div class="quickstrm-metric-title">Queue Depth (High / Low)</div>
-                <div id="metricQueueDepth" class="quickstrm-metric-value">0 / 0</div>
-                <div id="metricQueueSub" class="quickstrm-metric-sub">0 High / 0 Low Lane</div>
-            </div>
-
-            <!-- Metric 4: Active Probes -->
-            <div class="quickstrm-metric-card">
-                <div class="quickstrm-metric-title">Active Probes</div>
-                <div id="metricActiveProbes" class="quickstrm-metric-value">0 / 2</div>
-                <div id="metricActiveProbesSub" class="quickstrm-metric-sub">0 in cache</div>
-            </div>
-        </div>
-
-        <!-- 2. Probing & Mount Protection (paperList) -->
-        <form class="quickStrmConfigurationForm">
+            <!-- 2. Manual Library Pre-Probing -->
             <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-                <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1.2em; display: flex; align-items: center; gap: 0.4em;">
-                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">shield</span>
-                    Probing &amp; Mount Protection
+                <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1em; display: flex; align-items: center; gap: 0.4em;">
+                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">play_circle</span>
+                    Manual Library Pre-Probing
                 </h3>
-
-                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
-                    <label class="emby-checkbox-label">
-                        <input is="emby-checkbox" type="checkbox" id="chkEnableAutoProbe" class="emby-checkbox" />
-                        <span class="checkboxLabel">Auto-probe new .strm items on library add</span>
-                    </label>
-                    <div class="fieldDescription">Automatically triggers an asynchronous probe (Low Priority) whenever a new .strm file is detected by the library manager.</div>
-                </div>
-
-                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
-                    <label class="emby-checkbox-label">
-                        <input is="emby-checkbox" type="checkbox" id="chkEnableAutoDelete" class="emby-checkbox" />
-                        <span class="checkboxLabel">Enable Auto-Deletion of Dead STRM Links (HTTP 404)</span>
-                    </label>
-                    <div class="fieldDescription">Deletes the .strm file and removes it from the library when its pre-flight check returns a deterministic HTTP 404. Automatically halted when the circuit breaker is tripped.</div>
-                </div>
-
-                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
-                    <label class="emby-checkbox-label">
-                        <input is="emby-checkbox" type="checkbox" id="chkEnableNextEpisodePreWarm" class="emby-checkbox" />
-                        <span class="checkboxLabel">Enable Next-Episode Pre-Warming</span>
-                    </label>
-                    <div class="fieldDescription">When playback starts on an episode, automatically enqueues the immediately following episode into the High Priority probe lane so its stream info is resolved before the current episode finishes.</div>
-                </div>
-
-                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
-                    <label class="emby-checkbox-label">
-                        <input is="emby-checkbox" type="checkbox" id="chkSynthesizeVirtualChapters" class="emby-checkbox" />
-                        <span class="checkboxLabel">Synthesize 5-Minute Virtual Chapters</span>
-                    </label>
-                    <div class="fieldDescription">Once runtime is resolved on a .strm item, creates virtual chapter markers every 5 minutes if 0 chapters exist, enabling users to jump around effortlessly without heavy chapter extraction.</div>
-                </div>
-
-                <div class="inputContainer" style="margin-bottom: 1.4em;">
-                    <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input" label="Mount Marker File Name (Optional)" />
-                    <div class="fieldDescription">A verification file that must exist on your cloud mount (e.g. .mount_ok). Traverses up to 5 parent folders above each .strm. If missing, failures are treated as a dropped mount and deletion is suppressed. If empty, an empty parent folder is treated as a dropped mount.</div>
-                </div>
-
-                <div class="inputContainer" style="margin-bottom: 1.8em;">
-                    <input is="emby-input" type="text" id="txtJellyfinBaseUrl" class="emby-input" label="Jellyfin Base URL for *arr Webhooks (Optional)" />
-                    <div class="fieldDescription">The reachable URL of this Jellyfin server as seen by your *arr instances (e.g. http://192.168.1.100:8096 or http://jellyfin:8096). Leave blank to use the internal server URL automatically.</div>
-                </div>
-
-                <div>
-                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
-                        <span>Save Settings</span>
-                    </button>
-                </div>
-            </div>
-        </form>
-
-        <!-- 3. Zero-Touch *arr Suite Integration (paperList) -->
-        <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
-                <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
-                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">cloud_sync</span>
-                    Zero-Touch *arr Suite Integration
-                </h3>
-                <div style="display: flex; gap: 0.5em; flex-wrap: wrap;">
-                    <button is="emby-button" type="button" id="btnSyncArrWebhooks" class="raised button-submit emby-button" style="margin: 0;">
-                        <span>Sync Webhooks Now</span>
-                    </button>
-                    <button is="emby-button" type="button" id="btnWipeArrWebhooks" class="raised emby-button" style="margin: 0; background: #b71c1c; color: white;">
-                        <span>Wipe All *arr Webhooks</span>
-                    </button>
-                    <button is="emby-button" type="button" id="btnShowAddArrModal" class="raised emby-button" style="margin: 0;">
-                        <span>+ Add Instance</span>
-                    </button>
-                </div>
-            </div>
-            <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
-                Connect your Radarr, Sonarr, and Whisparr instances. QuickSTRM automatically provisions webhooks so that incoming STRM downloads are probed instantly in the High Priority lane, and confirmed 404 links trigger automatic searches for working replacements.
-            </div>
-
-            <!-- List of Configured Instances -->
-            <div id="arrInstancesList" class="paperList" style="padding: 1.2em; margin-bottom: 1.2em; border-radius: 8px;">
-                <div style="color: var(--text-muted-color, #777); font-size: 0.9em; padding: 1em 0;">No *arr instances configured. Click "+ Add Instance" above to connect.</div>
-            </div>
-
-            <!-- Add/Edit Instance Panel (collapsible) -->
-            <div id="arrAddInstancePanel" class="paperList" style="display: none; padding: 1.5em; margin-top: 1.2em; border-radius: 8px;">
-                <h4 id="arrPanelTitle" style="margin: 0 0 1em 0; font-size: 1.05em; display: flex; align-items: center; gap: 0.4em;">
-                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span>
-                    Add *arr Connection
-                </h4>
-                <div class="quickstrm-form-row">
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="addArrName">Instance Name</label>
-                        <input is="emby-input" type="text" id="addArrName" class="emby-input" placeholder="e.g., Local Radarr" />
-                    </div>
-                    <div class="selectContainer">
-                        <label class="selectLabel" for="addArrType">Application Type</label>
-                        <select is="emby-select" id="addArrType" class="emby-select">
-                            <option value="Radarr">Radarr</option>
-                            <option value="Sonarr">Sonarr</option>
-                            <option value="Whisparr">Whisparr</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="quickstrm-form-row">
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="addArrBaseUrl">Base URL</label>
-                        <input is="emby-input" type="text" id="addArrBaseUrl" class="emby-input" placeholder="e.g., http://192.168.1.100:7878" />
-                        <div class="fieldDescription">The reachable URL of the *arr instance. Do not include trailing slashes.</div>
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
-                        <div class="inputContainer" style="flex-grow: 1; margin: 0;">
-                            <label class="inputLabel" for="addArrApiKey">API Key</label>
-                            <div style="display: flex; gap: 6px; align-items: center;">
-                                <input is="emby-input" type="password" id="addArrApiKey" class="emby-input" placeholder="Enter 32-character API Key" style="flex-grow: 1;" />
-                                <button is="emby-button" type="button" id="btnToggleApiKeyVisibility" class="raised emby-button" style="margin: 0; padding: 0.4em 0.8em; font-size: 0.85em; white-space: nowrap;">
-                                    <span>Show</span>
-                                </button>
-                            </div>
-                        </div>
-                        <button is="emby-button" type="button" id="btnTestArrConnection" class="raised emby-button" style="margin: 0; white-space: nowrap;">
-                            <span>Test Connection</span>
-                        </button>
-                    </div>
-                </div>
-                <div class="quickstrm-form-row" style="margin-bottom: 0.4em;">
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="addArrPathFrom">Remote Path (*arr)</label>
-                        <input is="emby-input" type="text" id="addArrPathFrom" class="emby-input" placeholder="e.g., /movies" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="addArrPathTo">Local Path (Jellyfin)</label>
-                        <input is="emby-input" type="text" id="addArrPathTo" class="emby-input" placeholder="e.g., /media/movies" />
-                    </div>
-                </div>
-                <div class="fieldDescription" style="margin-bottom: 1.2em;">Leave blank if your *arr container and Jellyfin container share the exact same volume mounts.</div>
-                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.4em;">
-                    <label class="emby-checkbox-label">
-                        <input is="emby-checkbox" type="checkbox" id="addArrAutoHeal" class="emby-checkbox" checked />
-                        <span class="checkboxLabel">Auto-Heal on 404 (Delete file record &amp; trigger replacement search command)</span>
-                    </label>
-                </div>
-                <div style="display: flex; gap: 0.6em; flex-wrap: wrap;">
-                    <button is="emby-button" type="button" id="btnSaveArrConnection" class="raised button-submit emby-button btnSaveArrInstance">
-                        <span>Save Connection</span>
-                    </button>
-                    <button is="emby-button" type="button" id="btnCancelArrInstance" class="raised emby-button">
-                        <span>Cancel</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- 4. STRM Maintenance Tools (paperList) -->
-        <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-            <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1em; display: flex; align-items: center; gap: 0.4em;">
-                <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">build</span>
-                STRM Maintenance Tools
-            </h3>
-
-            <!-- Tool A: Bulk URL Rewriter -->
-            <div style="margin-bottom: 2em; padding-bottom: 1.8em; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
-                <h4 style="margin: 0 0 0.4em 0; font-size: 1.05em;">Bulk URL / Path Rewriter</h4>
-                <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
-                    Scan and update target URLs inside all .strm files across your entire Jellyfin library (e.g. after domain migrations, CDN switches, or mount scheme changes).
-                </div>
-
-                <div class="quickstrm-form-row">
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="txtRewriteOldPrefix">Old Prefix</label>
-                        <input is="emby-input" type="text" id="txtRewriteOldPrefix" class="emby-input" placeholder="e.g. https://old-cdn.com/" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="txtRewriteNewPrefix">New Prefix</label>
-                        <input is="emby-input" type="text" id="txtRewriteNewPrefix" class="emby-input" placeholder="e.g. https://new-cdn.com/" />
-                    </div>
-                </div>
-
-                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
-                    <label class="emby-checkbox-label">
-                        <input is="emby-checkbox" type="checkbox" id="chkRewriteDryRun" class="emby-checkbox" checked />
-                        <span class="checkboxLabel">Dry Run (Preview matches without writing modifications)</span>
-                    </label>
-                </div>
-
-                <button is="emby-button" type="button" id="btnRunRewrite" class="raised button-submit emby-button" style="margin: 0;">
-                    <span>Execute URL Rewrite</span>
-                </button>
-
-                <div id="rewriteResults" style="display: none; margin-top: 1.2em; padding: 1.2em; border-radius: 6px; font-family: monospace; font-size: 0.85em; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line-color, rgba(255, 255, 255, 0.1));"></div>
-            </div>
-
-            <!-- Tool B: Manual Pre-Probing & Failure Cache Management -->
-            <div>
-                <h4 style="margin: 0 0 0.8em 0; font-size: 1.05em;">Manual Library Pre-Probing</h4>
 
                 <!-- Secondary Metrics Breakdown -->
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08)); text-align: center;">
@@ -472,32 +396,248 @@
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- 5. Recent Actions Ledger (paperList) -->
-        <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
-                <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
-                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">history</span>
-                    Recent Actions
-                </h3>
-                <div style="display: flex; gap: 0.5em; flex-wrap: wrap;">
-                    <button is="emby-button" type="button" id="btnClearLedger" class="raised emby-button" style="margin: 0; background: #b71c1c; color: white;">
-                        <span>Clear History</span>
-                    </button>
-                    <button is="emby-button" type="button" id="btnRefreshLedger" class="raised emby-button" style="margin: 0;">
-                        <span>Refresh Ledger</span>
-                    </button>
+            <!-- 3. Recent Actions Ledger -->
+            <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
+                    <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
+                        <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">history</span>
+                        Recent Actions Ledger
+                    </h3>
+                    <div style="display: flex; gap: 0.5em; flex-wrap: wrap;">
+                        <button is="emby-button" type="button" id="btnClearLedger" class="raised emby-button" style="margin: 0; background: #b71c1c; color: white;">
+                            <span>Clear History</span>
+                        </button>
+                        <button is="emby-button" type="button" id="btnRefreshLedger" class="raised emby-button" style="margin: 0;">
+                            <span>Refresh Ledger</span>
+                        </button>
+                    </div>
+                </div>
+                <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
+                    Live activity log showing the last 100 auto-heal, circuit breaker, and probe telemetry events.
+                </div>
+                <div id="recentActionsList" class="paperList" style="max-height: 250px; overflow-y: auto; padding: 1em; border-radius: 6px; background: rgba(0, 0, 0, 0.2); font-family: monospace; font-size: 0.85em; line-height: 1.6;">
+                    <div style="color: var(--text-muted-color, #777);">Loading recent actions...</div>
                 </div>
             </div>
-            <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
-                Live activity log showing the last 100 auto-heal, circuit breaker, and probe telemetry events.
+        </div>
+
+        <!-- ==================== TAB 2: *ARR INTEGRATIONS ==================== -->
+        <div id="tab-arr" class="quickstrm-tab-content" style="display: none;">
+            <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
+                    <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
+                        <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">cloud_sync</span>
+                        Zero-Touch *arr Suite Integration
+                    </h3>
+                    <div style="display: flex; gap: 0.5em; flex-wrap: wrap;">
+                        <button is="emby-button" type="button" id="btnSyncArrWebhooks" class="raised button-submit emby-button" style="margin: 0;">
+                            <span>Sync Webhooks Now</span>
+                        </button>
+                        <button is="emby-button" type="button" id="btnWipeArrWebhooks" class="raised emby-button" style="margin: 0; background: #b71c1c; color: white;">
+                            <span>Wipe All *arr Webhooks</span>
+                        </button>
+                        <button is="emby-button" type="button" id="btnShowAddArrModal" class="raised emby-button" style="margin: 0;">
+                            <span>+ Add Instance</span>
+                        </button>
+                    </div>
+                </div>
+                <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.4em;">
+                    Connect your Radarr, Sonarr, and Whisparr instances. QuickSTRM automatically provisions schema-driven webhooks so incoming STRM downloads are probed instantly in the High Priority lane, and confirmed 404 links trigger automatic searches for working replacements.
+                </div>
+
+                <!-- Jellyfin Callback URL Config Section -->
+                <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.06)); border-radius: 8px; padding: 1.2em; margin-bottom: 1.5em;">
+                    <div style="font-weight: 600; font-size: 0.95em; margin-bottom: 0.4em; display: flex; align-items: center; gap: 0.4em;">
+                        <span class="material-icons" style="font-size: 1.1em; color: var(--theme-primary-color, #00a4dc);">link</span>
+                        Jellyfin Webhook Callback URL
+                    </div>
+                    <div class="inputContainer" style="margin-bottom: 0.4em;">
+                        <input is="emby-input" type="text" id="txtJellyfinInternalUrl" class="emby-input" label="Jellyfin Callback URL for *arr Webhooks" placeholder="e.g. http://jellyfin:8096 or http://192.168.1.100:8096" />
+                        <div class="fieldDescription">The reachable URL of this Jellyfin server as seen by your *arr containers/hosts. Leave blank to default to http://localhost:8096.</div>
+                    </div>
+
+                    <!-- Smart Docker / Localhost Warning Banner -->
+                    <div id="dockerLocalhostWarning" class="quickstrm-warning-banner" style="display: none;">
+                        <span class="material-icons" style="color: #ff9800; font-size: 1.3em;">warning_amber</span>
+                        <div><strong>Warning:</strong> Jellyfin Callback URL is set to localhost, which another Docker container cannot reach. Use your container hostname (e.g., http://jellyfin:8096) or LAN IP.</div>
+                    </div>
+                </div>
+
+                <!-- List of Configured Instances -->
+                <div style="font-weight: 600; font-size: 0.95em; margin-bottom: 0.6em; color: var(--text-muted-color, #aaa);">
+                    Connected Services
+                </div>
+                <div id="arrInstancesList" style="margin-bottom: 1.2em;">
+                    <div style="color: var(--text-muted-color, #777); font-size: 0.9em; padding: 1em 0;">No *arr instances configured. Click "+ Add Instance" above to connect.</div>
+                </div>
+
+                <!-- Add/Edit Instance Panel (collapsible drawer) -->
+                <div id="arrAddInstancePanel" class="paperList" style="display: none; padding: 1.5em; margin-top: 1.2em; border-radius: 8px; border: 1px solid var(--theme-primary-color, #00a4dc);">
+                    <h4 id="arrPanelTitle" style="margin: 0 0 1em 0; font-size: 1.05em; display: flex; align-items: center; gap: 0.4em;">
+                        <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span>
+                        Add *arr Connection
+                    </h4>
+                    <div class="quickstrm-form-row">
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="addArrName">Instance Name</label>
+                            <input is="emby-input" type="text" id="addArrName" class="emby-input" placeholder="e.g., Local Radarr" />
+                        </div>
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="addArrType">Application Type</label>
+                            <select is="emby-select" id="addArrType" class="emby-select">
+                                <option value="Radarr">Radarr</option>
+                                <option value="Sonarr">Sonarr</option>
+                                <option value="Whisparr">Whisparr</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="quickstrm-form-row">
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="addArrBaseUrl">Base URL</label>
+                            <input is="emby-input" type="text" id="addArrBaseUrl" class="emby-input" placeholder="e.g., http://radarr:7878 or http://192.168.1.100:7878" />
+                            <div class="fieldDescription">The reachable URL of the *arr instance. Protocol will be auto-formatted.</div>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                            <div class="inputContainer" style="flex-grow: 1; margin: 0;">
+                                <label class="inputLabel" for="addArrApiKey">API Key</label>
+                                <div style="display: flex; gap: 6px; align-items: center;">
+                                    <input is="emby-input" type="password" id="addArrApiKey" class="emby-input" placeholder="Enter 32-character API Key" style="flex-grow: 1;" />
+                                    <button is="emby-button" type="button" id="btnToggleApiKeyVisibility" class="raised emby-button" style="margin: 0; padding: 0.4em 0.8em; font-size: 0.85em; white-space: nowrap;">
+                                        <span>Show</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <button is="emby-button" type="button" id="btnTestArrConnection" class="raised emby-button" style="margin: 0; white-space: nowrap;">
+                                <span>Test Connection</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="quickstrm-form-row" style="margin-bottom: 0.4em;">
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="addArrPathFrom">Remote Path (*arr)</label>
+                            <input is="emby-input" type="text" id="addArrPathFrom" class="emby-input" placeholder="e.g., /movies" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="addArrPathTo">Local Path (Jellyfin)</label>
+                            <input is="emby-input" type="text" id="addArrPathTo" class="emby-input" placeholder="e.g., /media/movies" />
+                        </div>
+                    </div>
+                    <div class="fieldDescription" style="margin-bottom: 1.2em;">Leave blank if your *arr container and Jellyfin container share the exact same volume mounts.</div>
+                    <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.4em;">
+                        <label class="emby-checkbox-label">
+                            <input is="emby-checkbox" type="checkbox" id="addArrAutoHeal" class="emby-checkbox" checked />
+                            <span class="checkboxLabel">Auto-Heal on 404 (Delete dead file record &amp; trigger replacement search command)</span>
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center;">
+                        <button is="emby-button" type="button" id="btnSaveArrConnection" class="raised button-submit emby-button btnSaveArrInstance">
+                            <span>Save Connection</span>
+                        </button>
+                        <button is="emby-button" type="button" id="btnCancelArrInstance" class="raised emby-button">
+                            <span>Cancel</span>
+                        </button>
+                    </div>
+
+                    <!-- Inline Feedback Banner for Drawer -->
+                    <div id="arrConnectionStatusBanner" class="quickstrm-inline-feedback" style="display: none;"></div>
+                </div>
             </div>
-            <div id="recentActionsList" class="paperList" style="max-height: 250px; overflow-y: auto; padding: 1em; border-radius: 6px; background: rgba(0, 0, 0, 0.2); font-family: monospace; font-size: 0.85em; line-height: 1.6;">
-                <div style="color: var(--text-muted-color, #777);">Loading recent actions...</div>
+        </div>
+
+        <!-- ==================== TAB 3: MAINTENANCE & ADVANCED ==================== -->
+        <div id="tab-maintenance" class="quickstrm-tab-content" style="display: none;">
+            <!-- Probing & Mount Protection Settings Form -->
+            <form class="quickStrmConfigurationForm">
+                <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
+                    <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1.2em; display: flex; align-items: center; gap: 0.4em;">
+                        <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">shield</span>
+                        Probing &amp; Mount Protection
+                    </h3>
+
+                    <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                        <label class="emby-checkbox-label">
+                            <input is="emby-checkbox" type="checkbox" id="chkEnableAutoProbe" class="emby-checkbox" />
+                            <span class="checkboxLabel">Auto-probe new .strm items on library add</span>
+                        </label>
+                        <div class="fieldDescription">Automatically triggers an asynchronous probe (Low Priority) whenever a new .strm file is detected by the library manager.</div>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                        <label class="emby-checkbox-label">
+                            <input is="emby-checkbox" type="checkbox" id="chkEnableAutoDelete" class="emby-checkbox" />
+                            <span class="checkboxLabel">Enable Auto-Deletion of Dead STRM Links (HTTP 404)</span>
+                        </label>
+                        <div class="fieldDescription">Deletes the .strm file and removes it from the library when its pre-flight check returns a deterministic HTTP 404. Automatically halted when the circuit breaker is tripped.</div>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                        <label class="emby-checkbox-label">
+                            <input is="emby-checkbox" type="checkbox" id="chkEnableNextEpisodePreWarm" class="emby-checkbox" />
+                            <span class="checkboxLabel">Enable Next-Episode Pre-Warming</span>
+                        </label>
+                        <div class="fieldDescription">When playback starts on an episode, automatically enqueues the immediately following episode into the High Priority probe lane so its stream info is resolved before the current episode finishes.</div>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                        <label class="emby-checkbox-label">
+                            <input is="emby-checkbox" type="checkbox" id="chkSynthesizeVirtualChapters" class="emby-checkbox" />
+                            <span class="checkboxLabel">Synthesize 5-Minute Virtual Chapters</span>
+                        </label>
+                        <div class="fieldDescription">Once runtime is resolved on a .strm item, creates virtual chapter markers every 5 minutes if 0 chapters exist, enabling users to jump around effortlessly without heavy chapter extraction.</div>
+                    </div>
+
+                    <div class="inputContainer" style="margin-bottom: 1.4em;">
+                        <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input" label="Mount Marker File Name (Optional)" />
+                        <div class="fieldDescription">A verification file that must exist on your cloud mount (e.g. .mount_ok). Traverses up to 5 parent folders above each .strm. If missing, failures are treated as a dropped mount and deletion is suppressed. If empty, an empty parent folder is treated as a dropped mount.</div>
+                    </div>
+
+                    <!-- Hidden alias to preserve backward compatibility if needed -->
+                    <input type="hidden" id="txtJellyfinBaseUrl" />
+
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                            <span>Save Settings</span>
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            <!-- STRM Maintenance Tools -->
+            <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
+                <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1em; display: flex; align-items: center; gap: 0.4em;">
+                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">build</span>
+                    Bulk URL / Path Rewriter
+                </h3>
+                <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
+                    Scan and update target URLs inside all .strm files across your entire Jellyfin library (e.g. after domain migrations, CDN switches, or mount scheme changes).
+                </div>
+
+                <div class="quickstrm-form-row">
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="txtRewriteOldPrefix">Old Prefix</label>
+                        <input is="emby-input" type="text" id="txtRewriteOldPrefix" class="emby-input" placeholder="e.g. https://old-cdn.com/" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="txtRewriteNewPrefix">New Prefix</label>
+                        <input is="emby-input" type="text" id="txtRewriteNewPrefix" class="emby-input" placeholder="e.g. https://new-cdn.com/" />
+                    </div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-anonymouscheckbox" style="margin-bottom: 1.2em;">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="chkRewriteDryRun" class="emby-checkbox" checked />
+                        <span class="checkboxLabel">Dry Run (Preview matches without writing modifications)</span>
+                    </label>
+                </div>
+
+                <button is="emby-button" type="button" id="btnRunRewrite" class="raised button-submit emby-button" style="margin: 0;">
+                    <span>Execute URL Rewrite</span>
+                </button>
+
+                <div id="rewriteResults" style="display: none; margin-top: 1.2em; padding: 1.2em; border-radius: 6px; font-family: monospace; font-size: 0.85em; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line-color, rgba(255, 255, 255, 0.1));"></div>
             </div>
         </div>
 
     </div>
 </div>
-
