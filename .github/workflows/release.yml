@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -13,7 +11,7 @@ permissions:
 
 concurrency:
   group: release-pipeline
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build-and-release:
@@ -54,9 +52,12 @@ jobs:
           cp meta.json ./publish/QuickSTRM/
           cp build.yaml ./publish/QuickSTRM/
 
-          # Recursively zip all contents including hidden files without flattening intended structures
+          # Normalize file timestamps so zip archive hash is deterministic and reproducible
+          find ./publish/QuickSTRM -exec touch -t 202601010000.00 {} +
+
+          # Recursively zip all contents without flattening intended structures
           cd ./publish/QuickSTRM
-          zip -r ../../QuickSTRM.zip .
+          zip -X -r ../../QuickSTRM.zip .
           cd ../../
 
           cp ./publish/QuickSTRM/QuickSTRM.dll ./QuickSTRM.dll
