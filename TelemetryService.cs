@@ -145,5 +145,14 @@ public class TelemetryService : IDisposable
 
         _disposed = true;
         _debounceSaveTimer.Dispose();
+
+        try
+        {
+            Plugin.Instance?.SaveConfiguration();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "QuickSTRM: Flush SaveConfiguration on shutdown failed");
+        }
     }
 }

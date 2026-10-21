@@ -28,6 +28,7 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
     private readonly ProbeService _probeService;
     private readonly IChapterManager? _chapterManager;
     private readonly ILogger<SessionMonitorService> _logger;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _prewarmedSessions = new();
     private int _disposed;
 
     public SessionMonitorService(
@@ -47,6 +48,7 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _sessionManager.PlaybackStart += OnPlaybackStart;
+        _sessionManager.PlaybackProgress += OnPlaybackProgress;
         _sessionManager.PlaybackStopped += OnPlaybackStopped;
         return Task.CompletedTask;
     }
@@ -54,12 +56,20 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _sessionManager.PlaybackStart -= OnPlaybackStart;
+        _sessionManager.PlaybackProgress -= OnPlaybackProgress;
         _sessionManager.PlaybackStopped -= OnPlaybackStopped;
+        _prewarmedSessions.Clear();
         return Task.CompletedTask;
     }
 
     private void OnPlaybackStart(object? sender, PlaybackProgressEventArgs e)
     {
+        var sessionId = e.Session?.Id;
+        if (!string.IsNullOrEmpty(sessionId) && !_prewarmedSessions.TryAdd(sessionId, 0))
+        {
+            return;
+        }
+
         var config = Plugin.Instance?.Configuration;
         if (config is not { EnableNextEpisodePreWarm: true })
         {
@@ -82,6 +92,42 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
                 _logger.LogWarning(ex, "QuickSTRM: Failed to pre-warm next episode after playback start on {Name}", currentEpisode.Name);
             }
         });
+    }
+
+    private void OnPlaybackProgress(object? sender, PlaybackProgressEventArgs e)
+    {
+        // Check lightweight boolean latch before querying SQLite or allocating tasks
+        var sessionId = e.Session?.Id;
+        if (string.IsNullOrEmpty(sessionId) || _prewarmedSessions.ContainsKey(sessionId))
+        {
+            return;
+        }
+
+        var config = Plugin.Instance?.Configuration;
+        if (config is not { EnableNextEpisodePreWarm: true })
+        {
+            return;
+        }
+
+        if (e.Item is not Episode currentEpisode || !currentEpisode.IndexNumber.HasValue)
+        {
+            return;
+        }
+
+        if (_prewarmedSessions.TryAdd(sessionId, 0))
+        {
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    PreWarmNextEpisode(currentEpisode);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "QuickSTRM: Failed to pre-warm next episode during playback on {Name}", currentEpisode.Name);
+                }
+            });
+        }
     }
 
     private void PreWarmNextEpisode(Episode currentEpisode)
@@ -146,6 +192,16 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
 
     private void OnPlaybackStopped(object? sender, PlaybackProgressEventArgs e)
     {
+        if (!string.IsNullOrEmpty(e.Session?.Id))
+        {
+            _prewarmedSessions.TryRemove(e.Session.Id, out _);
+        }
+
+        if (_prewarmedSessions.Count > 1000)
+        {
+            _prewarmedSessions.Clear();
+        }
+
         var config = Plugin.Instance?.Configuration;
         if (config is not { SynthesizeVirtualChapters: true })
         {
@@ -237,6 +293,8 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
         }
 
         _sessionManager.PlaybackStart -= OnPlaybackStart;
+        _sessionManager.PlaybackProgress -= OnPlaybackProgress;
         _sessionManager.PlaybackStopped -= OnPlaybackStopped;
+        _prewarmedSessions.Clear();
     }
 }

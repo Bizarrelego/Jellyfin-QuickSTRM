@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -65,6 +66,26 @@ public class VfsPrewarmService : IDisposable
     }
 
     /// <summary>
+    /// Checks synchronously whether an item ID was recently pre-warmed within the sliding cache expiration window.
+    /// Fast synchronous path avoiding closure and Task.Run allocations.
+    /// </summary>
+    public bool IsRecentlyWarmed(string itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+        {
+            return false;
+        }
+
+        return _cache.TryGetValue($"QuickSTRM:PreWarm:{itemId}", out _);
+    }
+
+    /// <summary>
+    /// Checks synchronously whether an item ID was recently pre-warmed within the sliding cache expiration window.
+    /// </summary>
+    public bool IsRecentlyWarmed(Guid itemId)
+        => IsRecentlyWarmed(itemId.ToString("N")) || IsRecentlyWarmed(itemId.ToString("D"));
+
+    /// <summary>
     /// Predictively pre-warms the media stream for the specified item ID by reading the first 5MB.
     /// Aborts if the item was already pre-warmed within the last 5 minutes.
     /// </summary>
@@ -75,13 +96,13 @@ public class VfsPrewarmService : IDisposable
             return;
         }
 
-        var cacheKey = $"QuickSTRM:PreWarm:{itemId}";
-        if (_cache.TryGetValue(cacheKey, out _))
+        if (IsRecentlyWarmed(itemId))
         {
             _logger.LogDebug("QuickSTRM: Item {ItemId} was recently pre-warmed within the last 5 minutes; skipping", itemId);
             return;
         }
 
+        var cacheKey = $"QuickSTRM:PreWarm:{itemId}";
         // Set sliding expiration of 5 minutes to prevent overlapping reads from clients like Fire TV
         _cache.Set(cacheKey, true, new MemoryCacheEntryOptions
         {
@@ -342,12 +363,10 @@ public class VfsPrewarmService : IDisposable
             }
 
             var prefix = Path.GetFileNameWithoutExtension(strmPath);
-            var subExtensions = new[] { ".srt", ".ass", ".ssa", ".vtt" };
-
-            string[] candidateFiles;
+            IEnumerable<string> candidateFiles;
             try
             {
-                candidateFiles = Directory.GetFiles(dir, $"{prefix}*");
+                candidateFiles = Directory.EnumerateFiles(dir, $"{prefix}*");
             }
             catch (Exception)
             {
@@ -359,8 +378,11 @@ public class VfsPrewarmService : IDisposable
             {
                 foreach (var file in candidateFiles)
                 {
-                    var ext = Path.GetExtension(file);
-                    if (subExtensions.Any(e => string.Equals(e, ext, StringComparison.OrdinalIgnoreCase)))
+                    var ext = Path.GetExtension(file.AsSpan());
+                    if (ext.Equals(".srt", StringComparison.OrdinalIgnoreCase) ||
+                        ext.Equals(".ass", StringComparison.OrdinalIgnoreCase) ||
+                        ext.Equals(".ssa", StringComparison.OrdinalIgnoreCase) ||
+                        ext.Equals(".vtt", StringComparison.OrdinalIgnoreCase))
                     {
                         try
                         {
@@ -370,7 +392,7 @@ public class VfsPrewarmService : IDisposable
                                 FileAccess.Read,
                                 FileShare.ReadWrite,
                                 bufferSize: 64 * 1024,
-                                useAsync: true);
+                                options: FileOptions.Asynchronous | FileOptions.SequentialScan);
 
                             _ = await subFs.ReadAsync(buffer.AsMemory(0, 64 * 1024), ct).ConfigureAwait(false);
                             _logger.LogDebug("QuickSTRM: Pre-warmed adjacent subtitle: {Path}", file);

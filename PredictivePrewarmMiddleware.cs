@@ -51,7 +51,8 @@ public class PredictivePrewarmMiddleware : IMiddleware
         await next(context).ConfigureAwait(false);
 
         // After the pipeline returns, dispatch a background Task.Run to VfsPrewarmService.PreWarmItemAsync using the extracted itemId
-        if (!string.IsNullOrEmpty(itemId))
+        // Fast-path synchronous check prevents ThreadPool queueing and closure allocations on cache hits
+        if (!string.IsNullOrEmpty(itemId) && !_prewarmService.IsRecentlyWarmed(itemId))
         {
             _ = Task.Run(async () =>
             {

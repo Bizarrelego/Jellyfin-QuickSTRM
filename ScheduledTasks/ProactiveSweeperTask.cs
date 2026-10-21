@@ -69,83 +69,94 @@ public class ProactiveSweeperTask : IScheduledTask
         _logger.LogInformation("QuickSTRM: Starting Proactive STRM Dead Link Sweeper task");
         progress?.Report(0);
 
-        var strmItems = _libraryManager.GetItemList(new InternalItemsQuery
-        {
-            MediaTypes = new[] { MediaType.Video },
-            Recursive = true
-        }).Where(item => item.Path != null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase)).ToList();
-
-        var total = strmItems.Count;
-        if (total == 0)
-        {
-            _logger.LogInformation("QuickSTRM: No .strm items found in library to sweep");
-            progress?.Report(100);
-            return;
-        }
-
-        _logger.LogInformation("QuickSTRM: Found {Count} .strm items to verify", total);
-
         var httpClient = _httpClientFactory.CreateClient("QuickSTRM");
         var processed = 0;
         var deadCount = 0;
+        var offset = 0;
+        const int pageSize = 500;
 
-        foreach (var item in strmItems)
+        while (!cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Paced loop: wait 1000ms between each check to prevent rate-limiting and Core i3 thread exhaustion
-            await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
-
-            try
+            var query = new InternalItemsQuery
             {
-                if (string.IsNullOrEmpty(item.Path) || !File.Exists(item.Path))
+                MediaTypes = new[] { MediaType.Video },
+                Recursive = true,
+                StartIndex = offset,
+                Limit = pageSize
+            };
+
+            var batch = _libraryManager.GetItemList(query);
+            if (batch.Count == 0)
+            {
+                break;
+            }
+
+            var strmItems = batch
+                .Where(item => item.Path != null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var item in strmItems)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Paced loop: wait 1000ms between each check to prevent rate-limiting and Core i3 thread exhaustion
+                await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
+
+                try
                 {
-                    continue;
+                    if (string.IsNullOrEmpty(item.Path) || !File.Exists(item.Path))
+                    {
+                        continue;
+                    }
+
+                    var url = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
+                    if (string.IsNullOrWhiteSpace(url))
+                    {
+                        continue;
+                    }
+
+                    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+                        (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                    {
+                        continue;
+                    }
+
+                    using var request = new HttpRequestMessage(HttpMethod.Head, uri);
+                    request.Headers.UserAgent.ParseAdd("QuickSTRM/2.0");
+
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+                    using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+                    if (response.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        deadCount++;
+                        _logger.LogWarning("QuickSTRM Sweeper: Detected 404 Not Found for {Name} ({Url})", item.Name, url);
+                        await _probeService.AutoHealDeadItemAsync(item, cancellationToken).ConfigureAwait(false);
+                    }
                 }
-
-                var url = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
-                if (string.IsNullOrWhiteSpace(url))
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    continue;
+                    throw;
                 }
-
-                if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-                    (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                catch (Exception ex)
                 {
-                    continue;
+                    _logger.LogDebug(ex, "QuickSTRM Sweeper: Verification check error for {Name}", item.Name);
                 }
-
-                using var request = new HttpRequestMessage(HttpMethod.Head, uri);
-                request.Headers.UserAgent.ParseAdd("QuickSTRM/2.0");
-
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(TimeSpan.FromSeconds(10));
-
-                using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-                if (response.StatusCode == HttpStatusCode.NotFound)
+                finally
                 {
-                    deadCount++;
-                    _logger.LogWarning("QuickSTRM Sweeper: Detected 404 Not Found for {Name} ({Url})", item.Name, url);
-                    await _probeService.AutoHealDeadItemAsync(item, cancellationToken).ConfigureAwait(false);
+                    processed++;
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+
+            offset += batch.Count;
+            if (batch.Count < pageSize)
             {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "QuickSTRM Sweeper: Verification check error for {Name}", item.Name);
-            }
-            finally
-            {
-                processed++;
-                var pct = (double)processed / total * 100.0;
-                progress?.Report(Math.Min(100.0, pct));
+                break;
             }
         }
 
         progress?.Report(100);
-        _logger.LogInformation("QuickSTRM: Proactive sweeper completed. Verified {Total} items, handled {Dead} dead 404 links", total, deadCount);
+        _logger.LogInformation("QuickSTRM: Proactive sweeper completed. Verified {Total} items, handled {Dead} dead 404 links", processed, deadCount);
     }
 }

@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
@@ -65,20 +66,30 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 item, user, allowMediaProbe, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
         }
 
-        // If an item already has cached MediaStreams in the database (at least one Video and one Audio stream),
-        // return the MediaSourceInfo immediately without triggering ProbeOneInlineAsync.
-        // Never allow an inline ffprobe to run concurrently when Jellyfin is spinning up ffmpeg for an audio remux.
-        var cachedStreams = _inner.GetMediaStreams(item.Id);
-        if (HasVideoAndAudioStreams(cachedStreams))
+        // Fetch sources from _inner once with allowMediaProbe: false so Jellyfin builds static/dynamic
+        // sources without launching an unconstrained ffprobe.
+        var sources = (await _inner.GetPlaybackMediaSources(
+            item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken).ConfigureAwait(false)).ToList();
+
+        // Inspect sources directly: if any source already has cached video and audio streams in MediaStreams,
+        // return immediately without querying SQLite a second time.
+        var hasCachedStreams = false;
+        for (var i = 0; i < sources.Count; i++)
+        {
+            if (HasVideoAndAudioStreams(sources[i]))
+            {
+                hasCachedStreams = true;
+                break;
+            }
+        }
+
+        if (hasCachedStreams)
         {
             _logger.LogDebug(
                 "QuickSTRM: Item {Name} has cached video and audio streams in database; returning MediaSourceInfo immediately without probing",
                 item.Name);
 
-            var sources = await _inner.GetPlaybackMediaSources(
-                item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
-
-            EnsureStreamCapabilities(sources);
+            EnsureStreamCapabilities(sources, item.Id);
             return sources;
         }
 
@@ -89,41 +100,29 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 item.Name,
                 item.RunTimeTicks.Value);
 
-            // improves performance: already-probed .strm items skip a remote ffprobe on every playback start
-            var sources = await _inner.GetPlaybackMediaSources(
-                item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
-
-            EnsureStreamCapabilities(sources);
+            EnsureStreamCapabilities(sources, item.Id);
             return sources;
         }
 
         if (!allowMediaProbe)
         {
             // protects the Core i3: if the caller already forbade probing we must not start one
-            var sources = await _inner.GetPlaybackMediaSources(
-                item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
-
-            EnsureStreamCapabilities(sources);
+            EnsureStreamCapabilities(sources, item.Id);
             return sources;
         }
 
         // only this rare first-play path pays for an async state machine, because it must await the capped probe
-        return await ProbeThenResolveAsync(item, user, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
+        return await ProbeThenResolveAsync(item, user, sources, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<IReadOnlyList<MediaSourceInfo>> ProbeThenResolveAsync(
         BaseItem item,
         User user,
+        List<MediaSourceInfo> resolved,
         bool enablePathSubstitution,
         CancellationToken cancellationToken)
     {
         _logger.LogDebug("QuickSTRM: Inline-probing first-play {Name} (in memory)", item.Name);
-
-        // improves client stability: the stock manager (with probing disabled) still builds the complete list - static plus
-        // dynamic sources, per-user permission flags and ordering - so we only fill in stream info and never re-implement that logic
-        var resolved = await _inner.GetPlaybackMediaSources(
-            item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken)
-            .ConfigureAwait(false);
 
         var persistNeeded = false;
 
@@ -141,7 +140,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             {
                 if (source.Type != MediaSourceType.Placeholder
                     && staticIds.Contains(source.Id)
-                    && !HasVideoAndAudioStreams(source.MediaStreams))
+                    && !HasVideoAndAudioStreams(source))
                 {
                     targets.Add(source);
                 }
@@ -149,7 +148,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
             if (targets.Count == 0)
             {
-                EnsureStreamCapabilities(resolved);
+                EnsureStreamCapabilities(resolved, item.Id);
                 return resolved;
             }
 
@@ -164,16 +163,14 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             {
                 // breaker open: no inline probe. Enqueue the background persist instead; it refuses during the cooldown, and after it
                 // the pipeline admits exactly one half-open trial that must fully succeed in ffprobe before the circuit closes
-                // the persist queue silently ignores requests refused by an open breaker or an active half-open trial (no failure count,
-                // no negative cache), and playback falls back to the raw .strm URL immediately via the unprobed `resolved` sources
                 probeService.EnqueueBackgroundPersist(item, highPriority: true);
-                EnsureStreamCapabilities(resolved);
+                EnsureStreamCapabilities(resolved, item.Id);
                 return resolved;
             }
 
             if (!await probeService.PreflightAsync(item, cancellationToken).ConfigureAwait(false))
             {
-                EnsureStreamCapabilities(resolved);
+                EnsureStreamCapabilities(resolved, item.Id);
                 return resolved;
             }
 
@@ -227,7 +224,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         // protects the Core i3 from blocking I/O: allowMediaProbe was false for the whole resolution, so Jellyfin never launches
         // a second, uncapped ffprobe; on fallback the client receives the plain .strm URL and resolves the stream natively
-        EnsureStreamCapabilities(resolved);
+        EnsureStreamCapabilities(resolved, item.Id);
         return resolved;
     }
 
@@ -249,18 +246,18 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         return false;
     }
 
-    private static bool HasVideoAndAudioStreams(IReadOnlyList<MediaStream> streams)
+    private static bool HasVideoAndAudioStreams(MediaSourceInfo source)
     {
-        if (streams is null || streams.Count == 0)
+        if (source?.MediaStreams is null || source.MediaStreams.Count == 0)
         {
             return false;
         }
 
         var hasVideo = false;
         var hasAudio = false;
-        for (var i = 0; i < streams.Count; i++)
+        for (var i = 0; i < source.MediaStreams.Count; i++)
         {
-            var type = streams[i].Type;
+            var type = source.MediaStreams[i].Type;
             if (type == MediaStreamType.Video)
             {
                 hasVideo = true;
@@ -298,9 +295,31 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         return false;
     }
 
-    private static void EnsureStreamCapabilities(MediaSourceInfo source)
+    private void EnsureStreamCapabilities(MediaSourceInfo source, Guid? itemId = null)
     {
-        if (source is not null && HasValidMediaStreams(source))
+        if (source is null)
+        {
+            return;
+        }
+
+        // Only query SQLite if source.MediaStreams is not already populated
+        if ((source.MediaStreams == null || source.MediaStreams.Count == 0) && itemId.HasValue)
+        {
+            try
+            {
+                var streams = _inner.GetMediaStreams(itemId.Value);
+                if (streams is not null && streams.Count > 0)
+                {
+                    source.MediaStreams = streams is List<MediaStream> list ? list : new List<MediaStream>(streams);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "QuickSTRM: Could not retrieve media streams for item {ItemId}", itemId.Value);
+            }
+        }
+
+        if (HasValidMediaStreams(source))
         {
             source.SupportsDirectPlay = true;
             source.SupportsDirectStream = true;
@@ -308,7 +327,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         }
     }
 
-    private static void EnsureStreamCapabilities(IEnumerable<MediaSourceInfo> sources)
+    private void EnsureStreamCapabilities(IEnumerable<MediaSourceInfo> sources, Guid? itemId = null)
     {
         if (sources is null)
         {
@@ -317,7 +336,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         foreach (var source in sources)
         {
-            EnsureStreamCapabilities(source);
+            EnsureStreamCapabilities(source, itemId);
         }
     }
 
@@ -427,7 +446,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var sources = _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
         if (item?.Path != null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
         {
-            EnsureStreamCapabilities(sources);
+            EnsureStreamCapabilities(sources, item?.Id);
         }
         return sources;
     }
@@ -437,7 +456,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var source = await _inner.GetMediaSource(item, mediaSourceId, liveStreamId, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
         if (source is not null && item?.Path != null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
         {
-            EnsureStreamCapabilities(source);
+            EnsureStreamCapabilities(source, item?.Id);
         }
         return source;
     }

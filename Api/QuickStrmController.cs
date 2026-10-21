@@ -111,9 +111,11 @@ public class QuickStrmController : ControllerBase
 
 
     /// <summary>
-    /// Starts a manual pre-probe task or enqueues matching .strm items into the low-priority channel.
+    /// Starts a manual pre-probe task by dispatching an asynchronous background library scan.
+    /// Returns 202 Accepted immediately without blocking the HTTP request thread.
     /// Mode/Scope: "Incremental" (unprobed items only) or "All" / "Full" (all .strm items).
     /// </summary>
+    [HttpPost("Probe")]
     [HttpPost("Probe/Start")]
     [Authorize(Policy = "RequiresElevation")]
     public ActionResult StartProbe([FromQuery] string? mode = null, [FromBody] ProbeStartRequest? body = null)
@@ -122,46 +124,19 @@ public class QuickStrmController : ControllerBase
         var isIncremental = !string.Equals(scope, "All", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(scope, "Full", StringComparison.OrdinalIgnoreCase);
 
-        // Query ILibraryManager for video items
-        var query = new InternalItemsQuery
-        {
-            MediaTypes = new[] { MediaType.Video },
-            Recursive = true
-        };
-
-        var allVideos = _libraryManager.GetItemList(query);
-        var enqueuedCount = 0;
-
-        foreach (var item in allVideos)
-        {
-            if (item.Path is not null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
-            {
-                if (isIncremental && item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0)
-                {
-                    continue;
-                }
-
-                if (_probeService.EnqueueBackgroundPersist(item, highPriority: false, force: !isIncremental))
-                {
-                    enqueuedCount++;
-                }
-            }
-        }
-
-        // Also trigger probe service batch state tracking for UI progress display
-        _probeService.StartProbe(isIncremental ? "Incremental" : "Full");
+        var probeMode = isIncremental ? ProbeMode.Incremental : ProbeMode.All;
+        _ = _probeService.QueueLibraryScanAsync(probeMode);
 
         _logger.LogInformation(
-            "QuickSTRM: Manual probe started with scope {Scope}; enqueued {Count} .strm items into low-priority channel",
-            isIncremental ? "Incremental" : "All",
-            enqueuedCount);
+            "QuickSTRM: Manual probe initiated with scope {Scope}; background scan dispatched",
+            isIncremental ? "Incremental" : "All");
 
-        return Ok(new
+        return Accepted(new
         {
             Success = true,
-            Enqueued = enqueuedCount,
+            ScanningLibrary = true,
             Scope = isIncremental ? "Incremental" : "All",
-            Message = $"Enqueued {enqueuedCount} .strm items ({(isIncremental ? "Incremental" : "All")}) into probe queue."
+            Message = $"Scanning library and queueing {(isIncremental ? "Incremental" : "All")} probe items in background."
         });
     }
 
@@ -201,6 +176,7 @@ public class QuickStrmController : ControllerBase
     {
         var running = _probeService.PersistQueueRunning;
         var waiting = _probeService.PersistQueueWaiting;
+        var scanning = _probeService.IsScanningLibrary;
         return Ok(new
         {
             Waiting = waiting,
@@ -208,13 +184,14 @@ public class QuickStrmController : ControllerBase
             Total = _probeService.PersistQueueTotal,
             HighPriorityWaiting = _probeService.HighPriorityQueueWaiting,
             LowPriorityWaiting = _probeService.LowPriorityQueueWaiting,
+            ScanningLibrary = scanning,
             CircuitTripped = _probeService.IsCircuitTripped,
             CircuitBreakerOpen = _probeService.IsCircuitTripped,
             CircuitState = _probeService.CircuitState,
             CooldownSecondsRemaining = (int)Math.Ceiling(_probeService.CircuitCooldownRemaining.TotalSeconds),
             ConsecutiveFailures = _probeService.ConsecutiveFailures,
             CacheSize = _probeService.FailureCacheCount,
-            Status = running + waiting == 0 ? "Idle" : running > 0 ? "Running" : "Waiting"
+            Status = scanning ? "Scanning" : (running + waiting == 0 ? "Idle" : running > 0 ? "Running" : "Waiting")
         });
     }
 

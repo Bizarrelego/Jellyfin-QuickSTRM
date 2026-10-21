@@ -402,9 +402,10 @@
     }
 
     function startCountdown() {
-        if (!countdownTimer) {
-            countdownTimer = setInterval(renderCircuit, 1000);
+        if (countdownTimer) {
+            clearInterval(countdownTimer);
         }
+        countdownTimer = setInterval(renderCircuit, 1000);
     }
 
     function stopCountdown() {
@@ -512,8 +513,28 @@
             cooldownEndsAt = Date.now() + (data.CooldownSecondsRemaining || 0) * 1000;
             renderCircuit();
 
-            // Evaluate if LowPriorityWaiting === 0 and Running === 0
-            if (low === 0 && running === 0) {
+            var isScanning = data.ScanningLibrary === true;
+
+            // If background scan is actively enumerating library items
+            if (isScanning && low === 0 && running === 0) {
+                if (lblStatus) {
+                    lblStatus.textContent = 'Status: Scanning Library...';
+                    lblStatus.style.color = '#4fc3f7';
+                }
+                if (progressBar) {
+                    progressBar.classList.add('indeterminate');
+                }
+                if (btnStart) {
+                    btnStart.style.display = 'none';
+                }
+                if (btnStop) {
+                    btnStop.style.display = 'inline-flex';
+                }
+                return;
+            }
+
+            // Evaluate if LowPriorityWaiting === 0 and Running === 0 (and not scanning)
+            if (low === 0 && running === 0 && !isScanning) {
                 if (lblStatus) {
                     lblStatus.textContent = 'Status: Idle';
                     lblStatus.style.color = '';
@@ -913,9 +934,10 @@
     // ── Polling Management ──
 
     function startPolling() {
-        if (!pollTimer) {
-            pollTimer = setInterval(loadStatus, 1500);
+        if (pollTimer) {
+            clearInterval(pollTimer);
         }
+        pollTimer = setInterval(loadStatus, 1500);
     }
 
     function stopPolling() {
@@ -926,9 +948,10 @@
     }
 
     function startQueuePolling() {
-        if (!queuePollTimer) {
-            queuePollTimer = setInterval(loadQueue, 3000);
+        if (queuePollTimer) {
+            clearInterval(queuePollTimer);
         }
+        queuePollTimer = setInterval(loadQueue, 3000);
     }
 
     function stopQueuePolling() {

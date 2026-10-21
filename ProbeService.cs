@@ -28,6 +28,15 @@ using System.Reflection;
 namespace QuickSTRM;
 
 /// <summary>
+/// Operational mode for manual library pre-probing.
+/// </summary>
+public enum ProbeMode
+{
+    Incremental,
+    All
+}
+
+/// <summary>
 /// Background service that provides library-wide .strm pre-probing
 /// and automatic probing of newly added items.
 /// </summary>
@@ -41,6 +50,13 @@ public sealed class ProbeService : IHostedService, IDisposable
     private Task? _probeTask;
     private readonly object _lock = new();
 
+    private int _isScanningLibrary;
+
+    /// <summary>
+    /// Gets a value indicating whether a background library scan is currently running.
+    /// </summary>
+    public bool IsScanningLibrary => Volatile.Read(ref _isScanningLibrary) == 1;
+
     // protects memory: one entry per queued/running item ID (not per request), so N repeated play attempts of the same item
     // occupy exactly one slot instead of N parked tasks, each of which would otherwise pin a BaseItem and a closure in RAM
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _pendingPersist = new();
@@ -52,10 +68,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private const int MaxPendingPersist = 500;
 
     // negative cache of items whose background probe failed or timed out; dead URLs are rejected here until the entry expires
-    private readonly IMemoryCache _failedPersistCache;
-
-    // tracks keys stored in _failedPersistCache so ClearFailureCache can flush them without clearing unrelated Jellyfin cache items
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTime> _failedItemIds = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTime> _failedPersistCache = new();
 
     // in-flight probe coalescing to avoid duplicate ffprobe or hold-open loops across concurrent callers
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, Task<bool>> _inflightProbes = new();
@@ -63,8 +76,6 @@ public sealed class ProbeService : IHostedService, IDisposable
     // absolute expiration: entry expires exactly 1 hour after failure regardless of how often it is queried;
     // prevents perpetual lockouts from automated client retries continuously resetting a sliding window
     private static readonly TimeSpan FailedPersistAbsoluteExpiration = TimeSpan.FromHours(1);
-
-    private static string FailureKey(Guid itemId) => "QuickSTRM:persist-failed:" + itemId.ToString("N");
 
     private readonly Channel<BaseItem> _highPriorityChannel = Channel.CreateBounded<BaseItem>(
         new BoundedChannelOptions(MaxPendingPersist) { FullMode = BoundedChannelFullMode.DropWrite });
@@ -95,7 +106,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     public int PersistQueueTotal => _pendingPersist.Count;
 
     /// <summary>Gets the number of items currently in the negative failure cache.</summary>
-    public int FailureCacheCount => _failedItemIds.Count;
+    public int FailureCacheCount => _failedPersistCache.Count;
 
     // protects low-end CPUs (e.g. Core i3): hard ceiling of exactly 2 concurrent ffprobe-backed refreshes across ALL callers
     // (bulk, auto-probe and inline), so probes can never exceed the 2 threads we can spare without starving playback
@@ -192,10 +203,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         ILibraryManager libraryManager,
         IDirectoryService directoryService,
         IMediaEncoder mediaEncoder,
-        IMemoryCache memoryCache,
-        IActivityManager activityManager,
-        ILogger<ProbeService> logger,
-        TelemetryService telemetryService,
+        IMemoryCache? memoryCache = null,
+        IActivityManager activityManager = null!,
+        ILogger<ProbeService> logger = null!,
+        TelemetryService telemetryService = null!,
         IItemRepository? itemRepository = null)
     {
         _telemetryService = telemetryService;
@@ -203,7 +214,6 @@ public sealed class ProbeService : IHostedService, IDisposable
         _libraryManager = libraryManager;
         _directoryService = directoryService;
         _mediaEncoder = mediaEncoder;
-        _failedPersistCache = memoryCache;
         _logger = logger;
         _itemRepository = itemRepository;
     }
@@ -315,9 +325,13 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
 
         // prevents thread pool starvation on constrained hardware: a known-dead URL is rejected before any Task is created
-        if (_failedPersistCache.TryGetValue(FailureKey(item.Id), out _))
+        if (_failedPersistCache.TryGetValue(item.Id, out var expiresAt))
         {
-            return false;
+            if (expiresAt > DateTime.UtcNow)
+            {
+                return false;
+            }
+            _failedPersistCache.TryRemove(item.Id, out _);
         }
 
         // an open breaker halts queue processing; once cooldown has elapsed requests may queue
@@ -432,8 +446,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// </summary>
     public void ClearFailureCacheForItem(Guid itemId)
     {
-        _failedPersistCache.Remove(FailureKey(itemId));
-        _failedItemIds.TryRemove(itemId, out _);
+        _failedPersistCache.TryRemove(itemId, out _);
     }
 
     /// <summary>
@@ -441,12 +454,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// </summary>
     public void ClearFailureCache()
     {
-        foreach (var id in _failedItemIds.Keys)
-        {
-            _failedPersistCache.Remove(FailureKey(id));
-        }
-
-        _failedItemIds.Clear();
+        _failedPersistCache.Clear();
         _resolvedUrlCache.Clear();
         ResetCircuitBreaker();
         _logger.LogInformation("QuickSTRM: Flushed negative persistence failure cache and resolved URL cache");
@@ -680,7 +688,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                         FileAccess.Read,
                         FileShare.ReadWrite,
                         bufferSize: 4096,
-                        useAsync: true);
+                        options: FileOptions.Asynchronous | FileOptions.SequentialScan);
                     break;
                 }
                 catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException && attempt < HoldOpenRetryDelays.Length)
@@ -1192,25 +1200,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     {
         // prevents perpetual lockouts from automated client retries: absolute expiration of exactly 1 hour is enforced instead
         // of a sliding window, so background client requests or automated retries cannot continuously postpone the retry opportunity
-        _failedItemIds[item.Id] = DateTime.UtcNow.Add(FailedPersistAbsoluteExpiration);
-
-        var options = new MemoryCacheEntryOptions
-        {
-            AbsoluteExpirationRelativeToNow = FailedPersistAbsoluteExpiration
-        };
-
-        options.RegisterPostEvictionCallback((key, value, reason, state) =>
-        {
-            if (state is Guid id)
-            {
-                _failedItemIds.TryRemove(id, out _);
-            }
-        }, item.Id);
-
-        _failedPersistCache.Set(
-            FailureKey(item.Id),
-            (byte)0,
-            options);
+        _failedPersistCache[item.Id] = DateTime.UtcNow.Add(FailedPersistAbsoluteExpiration);
 
         _logger.LogWarning(
             "QuickSTRM: Background persist failed for {Name}; negative cache set with {Hours}h absolute expiration (prevents perpetual lockout)",
@@ -1219,7 +1209,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Sweeps expired entries from _resolvedUrlCache and _failedItemIds to ensure bounded memory usage on large libraries.
+    /// Sweeps expired entries from _resolvedUrlCache and _failedPersistCache to ensure bounded memory usage on large libraries.
     /// </summary>
     public void SweepExpiredCaches()
     {
@@ -1238,12 +1228,11 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
         }
 
-        foreach (var kvp in _failedItemIds)
+        foreach (var kvp in _failedPersistCache)
         {
-            if (now >= kvp.Value || !_failedPersistCache.TryGetValue(FailureKey(kvp.Key), out _))
+            if (now >= kvp.Value)
             {
-                _failedPersistCache.Remove(FailureKey(kvp.Key));
-                if (_failedItemIds.TryRemove(kvp.Key, out _))
+                if (_failedPersistCache.TryRemove(kvp.Key, out _))
                 {
                     sweptFailed++;
                 }
@@ -1442,6 +1431,93 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     /// <summary>
+    /// Initiates a non-blocking background library scan and enqueues matching .strm items into the persist channel.
+    /// Returns immediately without blocking the HTTP request thread.
+    /// </summary>
+    public Task QueueLibraryScanAsync(ProbeMode mode)
+    {
+        if (Interlocked.CompareExchange(ref _isScanningLibrary, 1, 0) != 0)
+        {
+            _logger.LogInformation("QuickSTRM: Library scan is already running; skipping duplicate scan request");
+            return Task.CompletedTask;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await ScanAndQueueLibraryAsync(mode).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "QuickSTRM: Background library scan failed");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _isScanningLibrary, 0);
+            }
+        });
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ScanAndQueueLibraryAsync(ProbeMode mode)
+    {
+        var isIncremental = mode == ProbeMode.Incremental;
+        var offset = 0;
+        const int pageSize = 500;
+        var enqueuedCount = 0;
+
+        _logger.LogInformation("QuickSTRM: Starting background library scan for {Mode} probe", mode);
+
+        while (!_shutdownCts.IsCancellationRequested && Volatile.Read(ref _isScanningLibrary) == 1)
+        {
+            var query = new InternalItemsQuery
+            {
+                MediaTypes = new[] { MediaType.Video },
+                Recursive = true,
+                StartIndex = offset,
+                Limit = pageSize
+            };
+
+            var batch = _libraryManager.GetItemList(query);
+            if (batch.Count == 0)
+            {
+                break;
+            }
+
+            foreach (var item in batch)
+            {
+                if (item.Path is not null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (isIncremental && item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0)
+                    {
+                        continue;
+                    }
+
+                    if (EnqueueBackgroundPersist(item, highPriority: false, force: !isIncremental))
+                    {
+                        enqueuedCount++;
+                    }
+                }
+            }
+
+            offset += batch.Count;
+            if (batch.Count < pageSize)
+            {
+                break;
+            }
+
+            await Task.Yield();
+        }
+
+        _logger.LogInformation(
+            "QuickSTRM: Background library scan completed for {Mode} probe; enqueued {Count} items into low-priority channel",
+            mode,
+            enqueuedCount);
+    }
+
+    /// <summary>
     /// Starts a probe task. Returns false if one is already running.
     /// </summary>
     /// <param name="mode">"Incremental" or "Full".</param>
@@ -1477,6 +1553,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// </summary>
     public void StopProbe()
     {
+        Interlocked.Exchange(ref _isScanningLibrary, 0);
         lock (_lock)
         {
             if (_cts is { IsCancellationRequested: false })
@@ -1793,14 +1870,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         _cts?.Dispose();
 
-        // 2) flush ONLY our own negative-cache keys. IMemoryCache is Jellyfin's shared singleton: disposing it here would break the
-        //    whole server, so it is deliberately never disposed by the plugin.
-        foreach (var id in _failedItemIds.Keys)
-        {
-            _failedPersistCache.Remove(FailureKey(id));
-        }
-
-        _failedItemIds.Clear();
+        _failedPersistCache.Clear();
         _inflightProbes.Clear();
         _pendingPersist.Clear();
         _resolvedUrlCache.Clear();
@@ -1854,6 +1924,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 /// </summary>
 public static class ItemRepositoryExtensions
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo?> CachedUpdateMethods = new();
+
     /// <summary>
     /// Persists item metadata changes to the repository or database.
     /// </summary>
@@ -1861,8 +1933,11 @@ public static class ItemRepositoryExtensions
     {
         if (repository is not null)
         {
-            var updateMethod = repository.GetType().GetMethod("UpdateItem", new[] { typeof(BaseItem) })
-                ?? repository.GetType().GetMethod("UpdateItem", BindingFlags.Public | BindingFlags.Instance);
+            var repoType = repository.GetType();
+            var updateMethod = CachedUpdateMethods.GetOrAdd(repoType, t =>
+                t.GetMethod("UpdateItem", new[] { typeof(BaseItem) })
+                ?? t.GetMethod("UpdateItem", BindingFlags.Public | BindingFlags.Instance));
+
             if (updateMethod is not null)
             {
                 updateMethod.Invoke(repository, new object[] { item });
