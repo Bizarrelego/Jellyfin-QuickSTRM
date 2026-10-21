@@ -12,8 +12,8 @@
         "changelog": "\ud83d\udee1\ufe0f Checksum Integrity Hardening & Version-Pinned Release Pipeline\nCritical fix eliminating Jellyfin's `The checksum of the received data doesn't match` installation errors, delivering version-pinned release artifacts and automated dual-target publishing.\nFixed\n- **Version-Pinned Package Releases**:\n  - Replaced mutable `/releases/download/latest/QuickSTRM.zip` package URLs in `manifest.json` with immutable version-pinned release tags (`/releases/download/v{version}/QuickSTRM.zip`).\n  - Completely eliminates CDN caching race conditions and stale Jellyfin repository cache mismatches where downloaded packages from `latest` clashed with expected version checksums.\nAdded\n- **Automated Dual-Target GitHub Release Pipeline**:\n  - Releases now automatically publish simultaneously to permanent immutable tags (`v{version}`) and rolling `latest` releases.\n  - Full automated version synchronization across `QuickSTRM.csproj`, `meta.json`, `build.yaml`, and `manifest.json` driven directly by `CHANGELOG.md` on every push.",
         "targetAbi": "12.2.0.0",
         "sourceUrl": "https://github.com/Bizarrelego/Jellyfin-QuickSTRM/releases/download/v3.0.2/QuickSTRM.zip",
-        "checksum": "24686AF15A70F65CD4B6B530A4307772",
-        "timestamp": "2026-10-21T03:01:24Z"
+        "checksum": "AF88A7524CE953A7D88B9A46D706A91E",
+        "timestamp": "2026-10-21T03:04:01Z"
       },
       {
         "version": "3.0.1",
