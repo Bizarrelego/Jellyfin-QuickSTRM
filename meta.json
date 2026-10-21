@@ -3,7 +3,7 @@
   "name": "QuickSTRM",
   "description": "Eliminates remote ffprobe latency with instant-start playback, zero-touch *arr suite orchestration, 404 auto-healing, and low-power hardware safeguards.",
   "overview": "Zero-touch .strm orchestration & instant playback suite",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "targetAbi": "12.2.0.0",
   "owner": "Bizarrelego",
   "category": "General",
