@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [3.1.1] - 2026-10-21
+
+### 🛠️ Bulletproof Dashboard Tab Switching & Tactile Button Feedback
+
+Targeted stability and UX enhancement release fixing script execution under Jellyfin's AMD module loader, introducing bulletproof event-delegated tab navigation, and adding instant tactile button spinners across administrative actions.
+
+### Fixed
+- **Jellyfin 12.x AMD Script Loading & SPA Initialization**:
+  - Added `data-controller="__plugin/QuickStrm.js"` to the root page element in `configPage.html` and registered dual `QuickStrm.js` / `QuickSTRM.js` page handlers in `Plugin.cs`.
+  - Wrapped `configPage.js` in a universal UMD/AMD wrapper supporting Jellyfin's RequireJS AMD `define()` loader, document/view `viewshow`/`pageshow` lifecycle listeners, and immediate execution guards (`data-quickstrm-init`) preventing redundant double-binding.
+- **Bulletproof Event-Delegated Tab Switching**:
+  - Replaced single-pass query selector loops with container-level event delegation on `view`.
+  - Enforced strict `style.display = 'block'` / `'none'` overrides alongside `.active` CSS toggles, preventing Jellyfin core theme styles from locking tab panel visibility.
+
+### Added
+- **Instant Tactile Feedback on Probe & Admin Actions**:
+  - Implemented immediate (0ms) tactile button feedback on `#btnStartProbe`: instantly disables the control and mode selector, changes button text to `<span class="quickstrm-btn-spinner"></span> Queueing Media...` with wait cursor, fires `Dashboard.showLoadingMsg()`, updates status text to cyan, and activates indeterminate progress animation before awaiting network response.
+  - Added `.quickstrm-btn-spinner` inline rotating ring animation to `btnStartProbe`, `btnRewriteUrls`, `btnSaveArrInstance`, and `btnTestArrConnection`.
+
 ## [3.1.0] - 2026-10-21
 
 ### ⚡ Schema-Driven *arr v3/v4 Webhook Provisioning, Per-Instance Diagnostics & Tabbed Dashboard UI

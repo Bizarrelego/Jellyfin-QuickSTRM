@@ -1,4 +1,4 @@
-<div id="QuickStrmConfigurationPage" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/QuickSTRM.js">
+<div id="QuickStrmConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/QuickStrm.js">
     <div class="content-primary" style="max-width: 980px; margin: 0 auto; padding: 1.5em 1em;">
         <style>
             .quickstrm-tab-bar {
@@ -198,10 +198,20 @@
                 margin-bottom: 1em;
             }
 
+            .quickstrm-tab-panel,
+            .quickstrm-tab-content {
+                display: none;
+            }
+            .quickstrm-tab-panel.active,
+            .quickstrm-tab-content.active {
+                display: block;
+            }
+
             @keyframes quickstrm-spin {
                 0% { transform: rotate(0deg); }
                 100% { transform: rotate(360deg); }
             }
+            .quickstrm-btn-spinner,
             .quickstrm-spinner {
                 display: inline-block;
                 width: 14px;
@@ -212,6 +222,7 @@
                 animation: quickstrm-spin 0.8s linear infinite;
                 vertical-align: middle;
                 margin-right: 0.4em;
+                box-sizing: border-box;
             }
 
             @keyframes quickstrm-indeterminate {
@@ -260,7 +271,7 @@
                     <h2 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">bolt</span>
                         QuickSTRM Management Suite
-                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v3.1.0</span>
+                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v3.1.1</span>
                     </h2>
                     <div style="font-size: 0.9em; color: var(--text-muted-color, #888); margin-top: 0.2em;">
                         Zero-Touch Playback Acceleration, *arr Orchestration &amp; Library Telemetry
@@ -302,7 +313,7 @@
         </div>
 
         <!-- ==================== TAB 1: OVERVIEW & PROBING ==================== -->
-        <div id="tab-overview" class="quickstrm-tab-content">
+        <div id="tab-overview" class="quickstrm-tab-panel quickstrm-tab-content active" style="display: block;">
             <!-- 1. Live Telemetry Grid -->
             <div class="quickstrm-metrics-grid">
                 <!-- Metric 1: Circuit State -->
@@ -423,7 +434,7 @@
         </div>
 
         <!-- ==================== TAB 2: *ARR INTEGRATIONS ==================== -->
-        <div id="tab-arr" class="quickstrm-tab-content" style="display: none;">
+        <div id="tab-arr" class="quickstrm-tab-panel quickstrm-tab-content" style="display: none;">
             <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
                 <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
                     <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
@@ -531,7 +542,7 @@
                         </label>
                     </div>
                     <div style="display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center;">
-                        <button is="emby-button" type="button" id="btnSaveArrConnection" class="raised button-submit emby-button btnSaveArrInstance">
+                        <button is="emby-button" type="button" id="btnSaveArrInstance" class="raised button-submit emby-button btnSaveArrConnection">
                             <span>Save Connection</span>
                         </button>
                         <button is="emby-button" type="button" id="btnCancelArrInstance" class="raised emby-button">
@@ -546,7 +557,7 @@
         </div>
 
         <!-- ==================== TAB 3: MAINTENANCE & ADVANCED ==================== -->
-        <div id="tab-maintenance" class="quickstrm-tab-content" style="display: none;">
+        <div id="tab-maintenance" class="quickstrm-tab-panel quickstrm-tab-content" style="display: none;">
             <!-- Probing & Mount Protection Settings Form -->
             <form class="quickStrmConfigurationForm">
                 <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
@@ -631,7 +642,7 @@
                     </label>
                 </div>
 
-                <button is="emby-button" type="button" id="btnRunRewrite" class="raised button-submit emby-button" style="margin: 0;">
+                <button is="emby-button" type="button" id="btnRewriteUrls" class="raised button-submit emby-button btnRunRewrite" style="margin: 0;">
                     <span>Execute URL Rewrite</span>
                 </button>
 
@@ -640,4 +651,6 @@
         </div>
 
     </div>
+    <!-- Fallback script loading for environments without dynamic AMD invocation -->
+    <script src="__plugin/QuickStrm.js"></script>
 </div>

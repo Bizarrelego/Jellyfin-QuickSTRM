@@ -56,6 +56,11 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             },
             new PluginPageInfo
             {
+                Name = "QuickStrm.js",
+                EmbeddedResourcePath = ns + ".Configuration.configPage.js"
+            },
+            new PluginPageInfo
+            {
                 Name = "QuickSTRM.js",
                 EmbeddedResourcePath = ns + ".Configuration.configPage.js"
             }

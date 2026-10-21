@@ -1,75 +1,84 @@
-let editingInstanceIndex = -1;
-let queuePollInterval = null;
-let probeTotalCount = 0;
-
-export default function (view) {
+(function () {
     'use strict';
 
-    var pluginId = '1278dbd6-8399-46c0-8e64-31f2d9e022ae';
+    function initQuickStrmPage(view) {
+        if (!view) {
+            return;
+        }
+        if (view.dataset.quickstrmInit === 'true') {
+            return;
+        }
+        view.dataset.quickstrmInit = 'true';
 
-    // ── 1. Telemetry Metric DOM references ──
-    var metricCircuitState = view.querySelector('#metricCircuitState');
-    var metricCircuitSub = view.querySelector('#metricCircuitSub');
-    var metricCooldownTimer = view.querySelector('#metricCooldownTimer');
-    var metricCooldownSub = view.querySelector('#metricCooldownSub');
-    var metricQueueDepth = view.querySelector('#metricQueueDepth');
-    var metricQueueSub = view.querySelector('#metricQueueSub');
-    var metricActiveProbes = view.querySelector('#metricActiveProbes');
-    var metricActiveProbesSub = view.querySelector('#metricActiveProbesSub');
-    var circuitBanner = view.querySelector('#circuitBreakerBanner');
-    var circuitStatus = view.querySelector('#circuitBreakerStatus');
-    var btnResetCircuit = view.querySelector('#btnResetCircuitBreaker');
+        var editingInstanceIndex = -1;
+        var queuePollInterval = null;
+        var probeTotalCount = 0;
 
-    // ── 2. Settings Form DOM references ──
-    var form = view.querySelector('.quickStrmConfigurationForm');
-    var chkAutoProbe = view.querySelector('#chkEnableAutoProbe');
-    var chkAutoDelete = view.querySelector('#chkEnableAutoDelete');
-    var chkNextEp = view.querySelector('#chkEnableNextEpisodePreWarm');
-    var chkChapters = view.querySelector('#chkSynthesizeVirtualChapters');
-    var txtMarker = view.querySelector('#txtMountMarkerFileName');
-    var txtJellyfinUrl = view.querySelector('#txtJellyfinInternalUrl') || view.querySelector('#txtJellyfinBaseUrl');
-    var txtJellyfinInternalUrl = view.querySelector('#txtJellyfinInternalUrl');
-    var txtJellyfinBaseUrl = view.querySelector('#txtJellyfinBaseUrl');
-    var dockerWarning = view.querySelector('#dockerLocalhostWarning');
-    var arrStatusBanner = view.querySelector('#arrConnectionStatusBanner');
-    var tabButtons = view.querySelectorAll('.quickstrm-tab-btn');
-    var tabContents = view.querySelectorAll('.quickstrm-tab-content');
+        var pluginId = '1278dbd6-8399-46c0-8e64-31f2d9e022ae';
 
-    // ── 3. *arr Suite DOM references ──
-    var btnSyncArr = view.querySelector('#btnSyncArrWebhooks');
-    var btnWipeArr = view.querySelector('#btnWipeArrWebhooks');
-    var btnShowAddModal = view.querySelector('#btnShowAddArrModal');
-    var arrList = view.querySelector('#arrInstancesList');
-    var addPanel = view.querySelector('#arrAddInstancePanel');
-    var addName = view.querySelector('#addArrName');
-    var addType = view.querySelector('#addArrType');
-    var addBaseUrl = view.querySelector('#addArrBaseUrl');
-    var addApiKey = view.querySelector('#addArrApiKey');
-    var btnToggleApiKey = view.querySelector('#btnToggleApiKeyVisibility');
-    var addPathFrom = view.querySelector('#addArrPathFrom');
-    var addPathTo = view.querySelector('#addArrPathTo');
-    var addAutoHeal = view.querySelector('#addArrAutoHeal');
-    var btnSaveAdd = view.querySelector('#btnSaveArrConnection') || view.querySelector('#btnSaveArrInstance');
-    var btnCancelAdd = view.querySelector('#btnCancelArrInstance');
-    var btnTestArr = view.querySelector('#btnTestArrConnection');
+        // ── 1. Telemetry Metric DOM references ──
+        var metricCircuitState = view.querySelector('#metricCircuitState');
+        var metricCircuitSub = view.querySelector('#metricCircuitSub');
+        var metricCooldownTimer = view.querySelector('#metricCooldownTimer');
+        var metricCooldownSub = view.querySelector('#metricCooldownSub');
+        var metricQueueDepth = view.querySelector('#metricQueueDepth');
+        var metricQueueSub = view.querySelector('#metricQueueSub');
+        var metricActiveProbes = view.querySelector('#metricActiveProbes');
+        var metricActiveProbesSub = view.querySelector('#metricActiveProbesSub');
+        var circuitBanner = view.querySelector('#circuitBreakerBanner');
+        var circuitStatus = view.querySelector('#circuitBreakerStatus');
+        var btnResetCircuit = view.querySelector('#btnResetCircuitBreaker');
 
-    // ── 4. STRM Tools DOM references ──
-    var txtRewriteOldPrefix = view.querySelector('#txtRewriteOldPrefix');
-    var txtRewriteNewPrefix = view.querySelector('#txtRewriteNewPrefix');
-    var chkRewriteDryRun = view.querySelector('#chkRewriteDryRun');
-    var btnRunRewrite = view.querySelector('#btnRunRewrite');
-    var rewriteResults = view.querySelector('#rewriteResults');
+        // ── 2. Settings Form DOM references ──
+        var form = view.querySelector('.quickStrmConfigurationForm');
+        var chkAutoProbe = view.querySelector('#chkEnableAutoProbe');
+        var chkAutoDelete = view.querySelector('#chkEnableAutoDelete');
+        var chkNextEp = view.querySelector('#chkEnableNextEpisodePreWarm');
+        var chkChapters = view.querySelector('#chkSynthesizeVirtualChapters');
+        var txtMarker = view.querySelector('#txtMountMarkerFileName');
+        var txtJellyfinUrl = view.querySelector('#txtJellyfinInternalUrl') || view.querySelector('#txtJellyfinBaseUrl');
+        var txtJellyfinInternalUrl = view.querySelector('#txtJellyfinInternalUrl');
+        var txtJellyfinBaseUrl = view.querySelector('#txtJellyfinBaseUrl');
+        var dockerWarning = view.querySelector('#dockerLocalhostWarning');
+        var arrStatusBanner = view.querySelector('#arrConnectionStatusBanner');
+        var tabButtons = view.querySelectorAll('.quickstrm-tab-btn');
+        var tabContents = view.querySelectorAll('.quickstrm-tab-content');
 
-    // Pre-probe & Failure cache DOM references
-    var lblTotal = view.querySelector('#lblSummaryTotal');
-    var lblProbed = view.querySelector('#lblSummaryProbed');
-    var lblUnprobed = view.querySelector('#lblSummaryUnprobed');
-    var lblQueue = view.querySelector('#lblSummaryQueue');
-    var lblQueueDetail = view.querySelector('#lblSummaryQueueDetail');
-    var selectMode = view.querySelector('#selectProbeMode');
-    var btnStart = view.querySelector('#btnStartProbe');
-    var btnStop = view.querySelector('#btnStopProbe');
-    var btnResetFailureCache = view.querySelector('#btnResetFailureCache');
+        // ── 3. *arr Suite DOM references ──
+        var btnSyncArr = view.querySelector('#btnSyncArrWebhooks');
+        var btnWipeArr = view.querySelector('#btnWipeArrWebhooks');
+        var btnShowAddModal = view.querySelector('#btnShowAddArrModal');
+        var arrList = view.querySelector('#arrInstancesList');
+        var addPanel = view.querySelector('#arrAddInstancePanel');
+        var addName = view.querySelector('#addArrName');
+        var addType = view.querySelector('#addArrType');
+        var addBaseUrl = view.querySelector('#addArrBaseUrl');
+        var addApiKey = view.querySelector('#addArrApiKey');
+        var btnToggleApiKey = view.querySelector('#btnToggleApiKeyVisibility');
+        var addPathFrom = view.querySelector('#addArrPathFrom');
+        var addPathTo = view.querySelector('#addArrPathTo');
+        var addAutoHeal = view.querySelector('#addArrAutoHeal');
+        var btnSaveAdd = view.querySelector('#btnSaveArrInstance') || view.querySelector('#btnSaveArrConnection');
+        var btnCancelAdd = view.querySelector('#btnCancelArrInstance');
+        var btnTestArr = view.querySelector('#btnTestArrConnection');
+
+        // ── 4. STRM Tools DOM references ──
+        var txtRewriteOldPrefix = view.querySelector('#txtRewriteOldPrefix');
+        var txtRewriteNewPrefix = view.querySelector('#txtRewriteNewPrefix');
+        var chkRewriteDryRun = view.querySelector('#chkRewriteDryRun');
+        var btnRunRewrite = view.querySelector('#btnRewriteUrls') || view.querySelector('#btnRunRewrite');
+        var rewriteResults = view.querySelector('#rewriteResults');
+
+        // Pre-probe & Failure cache DOM references
+        var lblTotal = view.querySelector('#lblSummaryTotal');
+        var lblProbed = view.querySelector('#lblSummaryProbed');
+        var lblUnprobed = view.querySelector('#lblSummaryUnprobed');
+        var lblQueue = view.querySelector('#lblSummaryQueue');
+        var lblQueueDetail = view.querySelector('#lblSummaryQueueDetail');
+        var selectMode = view.querySelector('#selectProbeMode') || view.querySelector('#selProbeMode');
+        var btnStart = view.querySelector('#btnStartProbe');
+        var btnStop = view.querySelector('#btnStopProbe');
+        var btnResetFailureCache = view.querySelector('#btnResetFailureCache');
     var lblStatus = view.querySelector('#probeStatusText') || view.querySelector('#lblTaskStatus');
     var progressBar = view.querySelector('#probeProgressBar') || view.querySelector('.taskProgressInner');
     var probeItemText = view.querySelector('#probeItemText');
@@ -170,28 +179,75 @@ export default function (view) {
     }
 
     function initTabs() {
-        if (!tabButtons || tabButtons.length === 0) { return; }
-        tabButtons.forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var targetTabId = btn.getAttribute('data-tab');
-                tabButtons.forEach(function (b) { b.classList.remove('active'); });
-                btn.classList.add('active');
+        var activeBtn = view.querySelector('.quickstrm-tab-btn.active') || view.querySelector('.quickstrm-tab-btn');
+        var targetTabId = activeBtn ? activeBtn.getAttribute('data-tab') : 'tab-overview';
 
-                tabContents.forEach(function (tc) {
-                    tc.style.display = tc.id === targetTabId ? 'block' : 'none';
-                });
+        var allButtons = view.querySelectorAll('.quickstrm-tab-btn');
+        var allPanels = view.querySelectorAll('.quickstrm-tab-panel, .quickstrm-tab-content');
 
-                if (targetTabId === 'tab-overview') {
-                    loadSummary();
-                    loadStatus();
-                    loadQueue();
-                    loadLedger();
-                } else if (targetTabId === 'tab-arr') {
-                    loadConfig();
-                }
-            });
+        allButtons.forEach(function (b) {
+            if (b === activeBtn) {
+                b.classList.add('active');
+            } else {
+                b.classList.remove('active');
+            }
+        });
+
+        allPanels.forEach(function (p) {
+            if (p.id === targetTabId) {
+                p.classList.add('active');
+                p.style.display = 'block';
+            } else {
+                p.classList.remove('active');
+                p.style.display = 'none';
+            }
         });
     }
+
+    // Bulletproof Tab Switching via Event Delegation on view
+    view.addEventListener('click', function (e) {
+        var btn = e.target.closest('.quickstrm-tab-btn');
+        if (!btn) {
+            return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        var targetTabId = btn.getAttribute('data-tab');
+        if (!targetTabId) {
+            return;
+        }
+
+        var allButtons = view.querySelectorAll('.quickstrm-tab-btn');
+        var allPanels = view.querySelectorAll('.quickstrm-tab-panel, .quickstrm-tab-content');
+
+        allButtons.forEach(function (b) {
+            b.classList.remove('active');
+        });
+
+        allPanels.forEach(function (p) {
+            p.classList.remove('active');
+            p.style.display = 'none';
+        });
+
+        btn.classList.add('active');
+
+        var targetPanel = view.querySelector('#' + targetTabId);
+        if (targetPanel) {
+            targetPanel.classList.add('active');
+            targetPanel.style.display = 'block';
+        }
+
+        if (targetTabId === 'tab-overview') {
+            loadSummary();
+            loadStatus();
+            loadQueue();
+            loadLedger();
+        } else if (targetTabId === 'tab-arr') {
+            loadConfig();
+        }
+    });
 
     function showLoading() {
         if (typeof Dashboard !== 'undefined' && typeof Dashboard.showLoadingMsg === 'function') {
@@ -405,6 +461,19 @@ export default function (view) {
         });
     }
 
+    function restoreProbeButton() {
+        if (btnStart) {
+            btnStart.disabled = false;
+            btnStart.style.opacity = '';
+            btnStart.style.cursor = '';
+            btnStart.innerHTML = '<span>Start pre-probe</span>';
+        }
+        var selMode = view.querySelector('#selectProbeMode') || view.querySelector('#selProbeMode');
+        if (selMode) {
+            selMode.disabled = false;
+        }
+    }
+
     function pollQueueStatus() {
         var queueUrl = (typeof ApiClient.getUrl === 'function') ? ApiClient.getUrl('QuickStrm/Queue') : 'QuickStrm/Queue';
         var fetchPromise = (typeof ApiClient.getJSON === 'function')
@@ -449,6 +518,7 @@ export default function (view) {
             if (low === 0 && running === 0) {
                 if (lblStatus) {
                     lblStatus.textContent = 'Status: Idle';
+                    lblStatus.style.color = '';
                 }
                 if (lblCurrentItem) {
                     lblCurrentItem.textContent = '-';
@@ -462,10 +532,10 @@ export default function (view) {
                 }
 
                 probeTotalCount = 0;
+                restoreProbeButton();
 
                 if (btnStart) {
                     btnStart.style.display = 'inline-flex';
-                    btnStart.disabled = false;
                 }
                 if (btnStop) {
                     btnStop.style.display = 'none';
@@ -544,6 +614,7 @@ export default function (view) {
                 if (btnStop) { btnStop.style.display = 'inline-flex'; }
                 startPolling();
             } else {
+                restoreProbeButton();
                 if (btnStart) { btnStart.style.display = 'inline-flex'; }
                 if (btnStop) { btnStop.style.display = 'none'; }
                 stopPolling();
@@ -936,7 +1007,11 @@ export default function (view) {
     }
 
     if (btnTestArr) {
-        btnTestArr.addEventListener('click', function () {
+        btnTestArr.addEventListener('click', function (e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
             hideDrawerFeedback();
             autoFormatUrlInput(addBaseUrl);
             var type = addType ? addType.value : 'Radarr';
@@ -950,7 +1025,11 @@ export default function (view) {
 
             var btnSpan = btnTestArr.querySelector('span');
             var origBtnText = btnSpan ? btnSpan.innerHTML : btnTestArr.innerHTML;
-            if (btnSpan) { btnSpan.innerHTML = '<span class="quickstrm-spinner"></span>Testing...'; }
+            if (btnSpan) {
+                btnSpan.innerHTML = '<span class="quickstrm-btn-spinner"></span> Testing...';
+            } else {
+                btnTestArr.innerHTML = '<span class="quickstrm-btn-spinner"></span> Testing...';
+            }
             btnTestArr.disabled = true;
 
             var payload = {
@@ -962,7 +1041,7 @@ export default function (view) {
             apiPost('QuickStrm/Arr/TestConnection', payload)
                 .then(function (result) {
                     btnTestArr.disabled = false;
-                    if (btnSpan) { btnSpan.innerHTML = origBtnText; }
+                    if (btnSpan) { btnSpan.innerHTML = origBtnText; } else { btnTestArr.innerHTML = origBtnText; }
 
                     var isSuccess = result && (result.Success === true || result.success === true);
                     var msg = (result && (result.Message || result.message)) || (isSuccess ? 'Connection to ' + type + ' successful.' : 'Connection failed.');
@@ -970,14 +1049,18 @@ export default function (view) {
                 })
                 .catch(function (err) {
                     btnTestArr.disabled = false;
-                    if (btnSpan) { btnSpan.innerHTML = origBtnText; }
+                    if (btnSpan) { btnSpan.innerHTML = origBtnText; } else { btnTestArr.innerHTML = origBtnText; }
                     showDrawerFeedback(false, extractErrorMessage(err));
                 });
         });
     }
 
     if (btnSaveAdd) {
-        btnSaveAdd.addEventListener('click', function () {
+        btnSaveAdd.addEventListener('click', function (e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
             hideDrawerFeedback();
             autoFormatUrlInput(addBaseUrl);
 
@@ -994,6 +1077,13 @@ export default function (view) {
                 return;
             }
 
+            var btnSaveSpan = btnSaveAdd.querySelector('span');
+            var origSaveText = btnSaveSpan ? btnSaveSpan.innerHTML : btnSaveAdd.innerHTML;
+            if (btnSaveSpan) {
+                btnSaveSpan.innerHTML = '<span class="quickstrm-btn-spinner"></span> Saving...';
+            } else {
+                btnSaveAdd.innerHTML = '<span class="quickstrm-btn-spinner"></span> Saving...';
+            }
             btnSaveAdd.disabled = true;
             showLoading();
 
@@ -1030,6 +1120,7 @@ export default function (view) {
                 });
             }).then(function (syncResults) {
                 btnSaveAdd.disabled = false;
+                if (btnSaveSpan) { btnSaveSpan.innerHTML = origSaveText; } else { btnSaveAdd.innerHTML = origSaveText; }
                 clearAddForm();
                 hideDrawerFeedback();
                 editingInstanceIndex = -1;
@@ -1044,6 +1135,7 @@ export default function (view) {
                 });
             }).catch(function (err) {
                 btnSaveAdd.disabled = false;
+                if (btnSaveSpan) { btnSaveSpan.innerHTML = origSaveText; } else { btnSaveAdd.innerHTML = origSaveText; }
                 hideLoading();
                 showDrawerFeedback(false, 'Failed to save connection: ' + extractErrorMessage(err));
                 loadConfig();
@@ -1152,7 +1244,15 @@ export default function (view) {
                     return;
                 }
 
+                var btnRewriteSpan = btnRunRewrite.querySelector('span');
+                var origRewriteHtml = btnRewriteSpan ? btnRewriteSpan.innerHTML : btnRunRewrite.innerHTML;
                 btnRunRewrite.disabled = true;
+                if (btnRewriteSpan) {
+                    btnRewriteSpan.innerHTML = '<span class="quickstrm-btn-spinner"></span> Rewriting...';
+                } else {
+                    btnRunRewrite.innerHTML = '<span class="quickstrm-btn-spinner"></span> Rewriting...';
+                }
+
                 if (rewriteResults) {
                     rewriteResults.style.display = 'block';
                     rewriteResults.innerHTML = 'Scanning and rewriting .strm files...';
@@ -1164,6 +1264,11 @@ export default function (view) {
                     DryRun: dryRun
                 }).then(function (res) {
                     btnRunRewrite.disabled = false;
+                    if (btnRewriteSpan) {
+                        btnRewriteSpan.innerHTML = origRewriteHtml;
+                    } else {
+                        btnRunRewrite.innerHTML = origRewriteHtml;
+                    }
                     if (rewriteResults) {
                         var out = '<div><strong>Status:</strong> ' + (res.DryRun ? '<span style="color: #ff9800;">DRY RUN (No files modified)</span>' : '<span style="color: #4caf50;">COMPLETE</span>') + '</div>';
                         out += '<div><strong>Total Scanned:</strong> ' + res.TotalScanned + '</div>';
@@ -1185,6 +1290,11 @@ export default function (view) {
                     }
                 }).catch(function (err) {
                     btnRunRewrite.disabled = false;
+                    if (btnRewriteSpan) {
+                        btnRewriteSpan.innerHTML = origRewriteHtml;
+                    } else {
+                        btnRunRewrite.innerHTML = origRewriteHtml;
+                    }
                     if (rewriteResults) {
                         rewriteResults.innerHTML = '<div style="color: #e53935;">Error executing rewrite: ' + escapeHtml(extractErrorMessage(err)) + '</div>';
                     }
@@ -1195,43 +1305,114 @@ export default function (view) {
 
     // 5. Manual Pre-probe & Cache Controls
     if (btnStart) {
-        btnStart.addEventListener('click', function () {
-            var mode = selectMode ? selectMode.value : 'Incremental';
-            btnStart.disabled = true;
+        btnStart.addEventListener('click', function (e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
 
+            var selMode = view.querySelector('#selectProbeMode') || view.querySelector('#selProbeMode');
+            var mode = selMode ? selMode.value : 'Incremental';
+
+            // 1. Disable #btnStartProbe and #selProbeMode
+            btnStart.disabled = true;
+            if (selMode) {
+                selMode.disabled = true;
+            }
+
+            // 2. Change #btnStartProbe innerHTML to `<span class="quickstrm-btn-spinner"></span> Queueing Media...` and apply visual loading state
+            btnStart.innerHTML = '<span class="quickstrm-btn-spinner"></span> Queueing Media...';
+            btnStart.style.opacity = '0.7';
+            btnStart.style.cursor = 'wait';
+
+            // 3. Immediately call Dashboard.showLoadingMsg()
+            if (typeof Dashboard !== 'undefined' && typeof Dashboard.showLoadingMsg === 'function') {
+                Dashboard.showLoadingMsg();
+            }
+
+            // 4. Immediately update #probeStatusText to cyan and add .indeterminate to #probeProgressBar BEFORE awaiting POST
+            var statusElem = view.querySelector('#probeStatusText') || view.querySelector('#lblTaskStatus');
+            if (statusElem) {
+                statusElem.textContent = 'Status: Scanning library & queueing items...';
+                statusElem.style.color = '#4fc3f7';
+            }
+            var progBar = view.querySelector('#probeProgressBar') || view.querySelector('.taskProgressInner');
+            if (progBar) {
+                progBar.classList.add('indeterminate');
+            }
+
+            // 5. POST /QuickStrm/Probe/Start
             apiPost('QuickStrm/Probe/Start?mode=' + encodeURIComponent(mode), { Scope: mode, Mode: mode })
                 .then(function (result) {
+                    if (typeof Dashboard !== 'undefined' && typeof Dashboard.hideLoadingMsg === 'function') {
+                        Dashboard.hideLoadingMsg();
+                    }
+
                     var enqueued = (result && (typeof result.Enqueued === 'number' ? result.Enqueued : result.enqueued)) || 0;
                     probeTotalCount = enqueued;
+
+                    // Update button text to "Probing in Progress..." while running
+                    btnStart.innerHTML = '<span class="quickstrm-btn-spinner"></span> Probing in Progress...';
 
                     if (queuePollInterval) {
                         clearInterval(queuePollInterval);
                         queuePollInterval = null;
                     }
 
-                    // Start the polling interval at 2000ms immediately after the POST request resolves
+                    // Show non-blocking toast
+                    var msg = (result && (result.Message || result.message)) || ('Queued ' + enqueued + ' items for probing.');
+                    if (typeof Dashboard !== 'undefined' && typeof Dashboard.alert === 'function') {
+                        Dashboard.alert({ message: msg });
+                    }
+
                     pollQueueStatus();
                     queuePollInterval = setInterval(pollQueueStatus, 2000);
-
-                    var msg = (result && (result.Message || result.message)) || ('Pre-probe task started (' + mode + ').');
-                    Dashboard.alert({ message: msg });
                 })
                 .catch(function (err) {
-                    btnStart.disabled = false;
-                    Dashboard.alert({ message: 'Failed to start probe: ' + extractErrorMessage(err) });
+                    if (typeof Dashboard !== 'undefined' && typeof Dashboard.hideLoadingMsg === 'function') {
+                        Dashboard.hideLoadingMsg();
+                    }
+                    restoreProbeButton();
+                    if (statusElem) {
+                        statusElem.textContent = 'Status: Error starting probe';
+                        statusElem.style.color = '#ef5350';
+                    }
+                    if (progBar) {
+                        progBar.classList.remove('indeterminate');
+                        progBar.style.width = '0%';
+                    }
+                    var errMsg = 'Failed to start probe: ' + extractErrorMessage(err);
+                    if (typeof Dashboard !== 'undefined' && typeof Dashboard.alert === 'function') {
+                        Dashboard.alert({ message: errMsg });
+                    } else {
+                        alert(errMsg);
+                    }
                 });
         });
     }
 
     if (btnStop) {
-        btnStop.addEventListener('click', function () {
+        btnStop.addEventListener('click', function (e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            btnStop.disabled = true;
+            btnStop.innerHTML = '<span class="quickstrm-btn-spinner"></span> Stopping...';
             apiPost('QuickStrm/Probe/Stop').then(function () {
+                btnStop.disabled = false;
+                btnStop.innerHTML = '<span>Stop</span>';
                 if (queuePollInterval) {
                     clearInterval(queuePollInterval);
                     queuePollInterval = null;
                 }
+                restoreProbeButton();
                 pollQueueStatus();
                 loadStatus();
+            }).catch(function () {
+                btnStop.disabled = false;
+                btnStop.innerHTML = '<span>Stop</span>';
+                restoreProbeButton();
             });
         });
     }
@@ -1330,6 +1511,15 @@ export default function (view) {
         loadLedger();
     });
 
+    view.addEventListener('pageshow', function () {
+        initTabs();
+        loadSummary();
+        loadStatus();
+        loadQueue();
+        loadConfig();
+        loadLedger();
+    });
+
     view.addEventListener('viewhide', function () {
         if (queuePollInterval) {
             clearInterval(queuePollInterval);
@@ -1339,4 +1529,47 @@ export default function (view) {
         stopQueuePolling();
         stopCountdown();
     });
+
+    // Initialize tabs and load initial state immediately
+    initTabs();
+    loadSummary();
+    loadStatus();
+    loadQueue();
+    loadConfig();
+    loadLedger();
 }
+
+    // 1. AMD Support for Jellyfin's RequireJS loader
+    if (typeof define === 'function' && define.amd) {
+        define([], function () {
+            return function (view, params) {
+                initQuickStrmPage(view);
+            };
+        });
+    }
+
+    // 2. Event-driven lifecycle binding on document for Jellyfin / Emby viewshow and pageshow
+    function onPageLifecycle(e) {
+        var page = (e && e.target && (e.target.id === 'QuickStrmConfigPage' || e.target.id === 'QuickStrmConfigurationPage' || (e.target.classList && e.target.classList.contains('pluginConfigurationPage'))))
+            ? e.target
+            : (document.querySelector('#QuickStrmConfigPage') || document.querySelector('#QuickStrmConfigurationPage'));
+        if (page) {
+            initQuickStrmPage(page);
+        }
+    }
+
+    document.addEventListener('viewshow', onPageLifecycle);
+    document.addEventListener('pageshow', onPageLifecycle);
+
+    // 3. Immediate execution if page element is already present in DOM
+    var existingPage = document.querySelector('#QuickStrmConfigPage') || document.querySelector('#QuickStrmConfigurationPage');
+    if (existingPage) {
+        existingPage.addEventListener('viewshow', function () {
+            initQuickStrmPage(existingPage);
+        });
+        existingPage.addEventListener('pageshow', function () {
+            initQuickStrmPage(existingPage);
+        });
+        initQuickStrmPage(existingPage);
+    }
+})();

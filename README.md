@@ -9,14 +9,14 @@
 </p>
 
 <p align="center">
-  <strong>QuickSTRM v3.1.0 — The Definitive Zero-Touch Orchestration Suite, Predictive Pre-Warmer, and Autonomous Auto-Healing Pipeline for Cloud-Mounted .STRM Libraries on Jellyfin 12.2+.</strong>
+  <strong>QuickSTRM v3.1.1 — The Definitive Zero-Touch Orchestration Suite, Predictive Pre-Warmer, and Autonomous Auto-Healing Pipeline for Cloud-Mounted .STRM Libraries on Jellyfin 12.2+.</strong>
 </p>
 
 ---
 
 ## ⚡ Overview & Core Pitch
 
-**QuickSTRM v3.1.0** is the definitive zero-touch `.strm` orchestration suite, playback acceleration engine, and automated maintenance system engineered natively for **Jellyfin 12.2+** on **.NET 10.0**.
+**QuickSTRM v3.1.1** is the definitive zero-touch `.strm` orchestration suite, playback acceleration engine, and automated maintenance system engineered natively for **Jellyfin 12.2+** on **.NET 10.0**.
 
 Managing cloud-mounted media libraries (such as Rclone, InfiniDysk, Google Drive, or WebDAV mounts) traditionally introduces crippling latency, dropped streams, and constant administrative intervention. Remote media links expire or 404, cloud mount spin-up times leave clients hanging on indefinite loading spinners, background trickplay extractors thrash network bandwidth, and concurrent webhook floods lock SQLite databases.
 
@@ -194,7 +194,7 @@ QuickSTRM integrates directly into the native Jellyfin administrator dashboard a
 
 ### Modern Segmented 3-Tab Enterprise Dashboard
 
-QuickSTRM v3.1.0 introduces a modern, high-density tabbed administrative layout:
+QuickSTRM v3.1.1 introduces a modern, high-density tabbed administrative layout:
 
 1. **📊 Overview & Probing Tab**:
    * **Real-Time Summary Metrics**: Instant visibility into total `.strm` files, probed streams, unprobed items, and cache efficiency.
