@@ -271,7 +271,7 @@
                     <h2 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">bolt</span>
                         QuickSTRM Management Suite
-                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v3.1.1</span>
+                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v3.1.2</span>
                     </h2>
                     <div style="font-size: 0.9em; color: var(--text-muted-color, #888); margin-top: 0.2em;">
                         Zero-Touch Playback Acceleration, *arr Orchestration &amp; Library Telemetry
@@ -280,17 +280,48 @@
             </div>
         </div>
 
+        <!-- Inline Tab Switcher Helper (Unbreakable Pure JS) -->
+        <script>
+            window.QuickStrmSwitchTab = function (btnElement, tabId) {
+                var page = (btnElement && btnElement.closest) ? btnElement.closest('#QuickStrmConfigPage') : document.querySelector('#QuickStrmConfigPage');
+                if (!page) {
+                    page = document.querySelector('#QuickStrmConfigPage') || document.querySelector('#QuickStrmConfigurationPage');
+                }
+                if (!page) return;
+                var targetTabId = tabId || (btnElement ? btnElement.getAttribute('data-tab') : 'tab-overview');
+                page.querySelectorAll('.quickstrm-tab-btn').forEach(function (b) {
+                    if (b === btnElement || b.getAttribute('data-tab') === targetTabId) {
+                        b.classList.add('active');
+                    } else {
+                        b.classList.remove('active');
+                    }
+                });
+                page.querySelectorAll('.quickstrm-tab-panel, .quickstrm-tab-content').forEach(function (p) {
+                    if (p.id === targetTabId) {
+                        p.classList.add('active');
+                        p.style.display = 'block';
+                    } else {
+                        p.classList.remove('active');
+                        p.style.display = 'none';
+                    }
+                });
+                if (window.QuickStrmOnTabSwitch) {
+                    window.QuickStrmOnTabSwitch(targetTabId);
+                }
+            };
+        </script>
+
         <!-- Segmented Pill-Tab Navigation Bar -->
         <div class="quickstrm-tab-bar">
-            <button type="button" class="quickstrm-tab-btn active" data-tab="tab-overview">
+            <button type="button" class="quickstrm-tab-btn active" data-tab="tab-overview" onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-overview');}else{var v=this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
                 <span class="material-icons" style="font-size: 1.1em;">dashboard</span>
                 <span>Overview &amp; Probing</span>
             </button>
-            <button type="button" class="quickstrm-tab-btn" data-tab="tab-arr">
+            <button type="button" class="quickstrm-tab-btn" data-tab="tab-arr" onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-arr');}else{var v=this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
                 <span class="material-icons" style="font-size: 1.1em;">cloud_sync</span>
                 <span>*arr Integrations</span>
             </button>
-            <button type="button" class="quickstrm-tab-btn" data-tab="tab-maintenance">
+            <button type="button" class="quickstrm-tab-btn" data-tab="tab-maintenance" onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-maintenance');}else{var v=this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
                 <span class="material-icons" style="font-size: 1.1em;">tune</span>
                 <span>Maintenance &amp; Advanced</span>
             </button>
@@ -651,6 +682,17 @@
         </div>
 
     </div>
-    <!-- Fallback script loading for environments without dynamic AMD invocation -->
-    <script src="__plugin/QuickStrm.js"></script>
+    <!-- Inline Self-Healing Bootstrapper: executes if Jellyfin's AMD loader hasn't bound the controller -->
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" style="display:none;" onload="
+        var page = this.closest('#QuickStrmConfigPage');
+        if (page && page.dataset.quickstrmBound !== 'true') {
+            var url = (window.ApiClient && typeof window.ApiClient.getUrl === 'function')
+                ? window.ApiClient.getUrl('web/configurationpage', { name: 'QuickStrm.js' })
+                : 'configurationpage?name=QuickStrm.js';
+            var s = document.createElement('script');
+            s.src = url;
+            s.async = true;
+            document.head.appendChild(s);
+        }
+    " />
 </div>

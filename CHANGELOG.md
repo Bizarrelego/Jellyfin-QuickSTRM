@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [3.1.2] - 2026-10-21
+
+### 🚀 Immediate AMD Controller Execution, Dual-Alias Routing & Self-Healing Bootstrapper
+
+Critical frontend resilience update resolving frozen tabs, dead JavaScript controllers, and delayed button feedback under Jellyfin 12.x SPA navigation.
+
+### Fixed
+- **Immediate AMD Controller Execution (`configPage.js`)**:
+  - Invokes `initQuickStrmPage(view)` immediately upon AMD factory execution rather than relying solely on future `viewshow`/`pageshow` events that Jellyfin 12.x fires prior to controller factory instantiation.
+  - Separated one-time event binding (`view.dataset.quickstrmBound = 'true'`) from dynamic data refreshing (`ctx.loadPageData()`), ensuring returning to the page always pulls fresh telemetry and status without duplicating event listeners.
+- **Dual-Alias Plugin Page Registration (`Plugin.cs`)**:
+  - Registered `QuickStrm.js`, `QuickStrm`, `QuickSTRM.js`, and `QuickStrmConfigurationPage` endpoints in `GetPages()` alongside `Name = Name` (`configPage.html`), guaranteeing RequireJS module lookups and direct client navigation never 404 regardless of web client version.
+- **Unbreakable Inline Tab Navigation (`configPage.html` & `configPage.js`)**:
+  - Exposed global `window.QuickStrmSwitchTab(btnElement, tabId)` and attached unbreakable inline `onclick` handlers on all tab buttons with zero-dependency DOM fallbacks.
+- **Self-Healing Image Bootstrapper**:
+  - Replaced static fallback `<script>` tags (which modern browsers ignore when injected via `innerHTML`) with a self-executing 1x1 GIF `onload` bootstrapper that dynamically fetches and injects `QuickStrm.js` into `document.head` if the AMD loader has not bound the page.
+  - Added a `setTimeout(bootstrap, 50)` fallback inside the AMD block to ensure script execution and binding even when loaded via dynamic script injection.
+
 ## [3.1.1] - 2026-10-21
 
 ### 🛠️ Bulletproof Dashboard Tab Switching & Tactile Button Feedback

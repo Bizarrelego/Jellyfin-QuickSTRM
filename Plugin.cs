@@ -49,6 +49,13 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         {
             new PluginPageInfo
             {
+                Name = Name,
+                EmbeddedResourcePath = ns + ".Configuration.configPage.html",
+                EnableInMainMenu = true,
+                MenuIcon = "bolt"
+            },
+            new PluginPageInfo
+            {
                 Name = "QuickStrmConfigurationPage",
                 EmbeddedResourcePath = ns + ".Configuration.configPage.html",
                 EnableInMainMenu = true,
@@ -57,6 +64,11 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             new PluginPageInfo
             {
                 Name = "QuickStrm.js",
+                EmbeddedResourcePath = ns + ".Configuration.configPage.js"
+            },
+            new PluginPageInfo
+            {
+                Name = "QuickStrm",
                 EmbeddedResourcePath = ns + ".Configuration.configPage.js"
             },
             new PluginPageInfo

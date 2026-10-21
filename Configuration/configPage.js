@@ -1,14 +1,52 @@
 (function () {
     'use strict';
 
+    // Global helper for immediate tab switching
+    window.QuickStrmSwitchTab = function (btnElement, tabId) {
+        var page = (btnElement && btnElement.closest) ? btnElement.closest('#QuickStrmConfigPage') : document.querySelector('#QuickStrmConfigPage');
+        if (!page) {
+            page = document.querySelector('#QuickStrmConfigPage') || document.querySelector('#QuickStrmConfigurationPage');
+        }
+        if (!page) return;
+
+        var targetTabId = tabId || (btnElement ? btnElement.getAttribute('data-tab') : 'tab-overview');
+        page.querySelectorAll('.quickstrm-tab-btn').forEach(function (b) {
+            if (b === btnElement || b.getAttribute('data-tab') === targetTabId) {
+                b.classList.add('active');
+            } else {
+                b.classList.remove('active');
+            }
+        });
+
+        page.querySelectorAll('.quickstrm-tab-panel, .quickstrm-tab-content').forEach(function (p) {
+            if (p.id === targetTabId) {
+                p.classList.add('active');
+                p.style.display = 'block';
+            } else {
+                p.classList.remove('active');
+                p.style.display = 'none';
+            }
+        });
+
+        if (window.QuickStrmOnTabSwitch) {
+            window.QuickStrmOnTabSwitch(targetTabId);
+        }
+    };
+
     function initQuickStrmPage(view) {
         if (!view) {
             return;
         }
-        if (view.dataset.quickstrmInit === 'true') {
+
+        // Separate one-time event binding from data refreshing so returning to the page refreshes data
+        if (view._quickstrmContext) {
+            view._quickstrmContext.loadPageData();
             return;
         }
-        view.dataset.quickstrmInit = 'true';
+
+        view.dataset.quickstrmBound = 'true';
+        var ctx = {};
+        view._quickstrmContext = ctx;
 
         var editingInstanceIndex = -1;
         var queuePollInterval = null;
@@ -181,27 +219,7 @@
     function initTabs() {
         var activeBtn = view.querySelector('.quickstrm-tab-btn.active') || view.querySelector('.quickstrm-tab-btn');
         var targetTabId = activeBtn ? activeBtn.getAttribute('data-tab') : 'tab-overview';
-
-        var allButtons = view.querySelectorAll('.quickstrm-tab-btn');
-        var allPanels = view.querySelectorAll('.quickstrm-tab-panel, .quickstrm-tab-content');
-
-        allButtons.forEach(function (b) {
-            if (b === activeBtn) {
-                b.classList.add('active');
-            } else {
-                b.classList.remove('active');
-            }
-        });
-
-        allPanels.forEach(function (p) {
-            if (p.id === targetTabId) {
-                p.classList.add('active');
-                p.style.display = 'block';
-            } else {
-                p.classList.remove('active');
-                p.style.display = 'none';
-            }
-        });
+        window.QuickStrmSwitchTab(activeBtn, targetTabId);
     }
 
     // Bulletproof Tab Switching via Event Delegation on view
@@ -215,30 +233,10 @@
         e.stopPropagation();
 
         var targetTabId = btn.getAttribute('data-tab');
-        if (!targetTabId) {
-            return;
-        }
+        window.QuickStrmSwitchTab(btn, targetTabId);
+    });
 
-        var allButtons = view.querySelectorAll('.quickstrm-tab-btn');
-        var allPanels = view.querySelectorAll('.quickstrm-tab-panel, .quickstrm-tab-content');
-
-        allButtons.forEach(function (b) {
-            b.classList.remove('active');
-        });
-
-        allPanels.forEach(function (p) {
-            p.classList.remove('active');
-            p.style.display = 'none';
-        });
-
-        btn.classList.add('active');
-
-        var targetPanel = view.querySelector('#' + targetTabId);
-        if (targetPanel) {
-            targetPanel.classList.add('active');
-            targetPanel.style.display = 'block';
-        }
-
+    window.QuickStrmOnTabSwitch = function (targetTabId) {
         if (targetTabId === 'tab-overview') {
             loadSummary();
             loadStatus();
@@ -247,7 +245,7 @@
         } else if (targetTabId === 'tab-arr') {
             loadConfig();
         }
-    });
+    };
 
     function showLoading() {
         if (typeof Dashboard !== 'undefined' && typeof Dashboard.showLoadingMsg === 'function') {
@@ -1502,22 +1500,21 @@
 
     // ── Page Lifecycle ──
 
-    view.addEventListener('viewshow', function () {
+    ctx.loadPageData = function () {
         initTabs();
         loadSummary();
         loadStatus();
         loadQueue();
         loadConfig();
         loadLedger();
+    };
+
+    view.addEventListener('viewshow', function () {
+        ctx.loadPageData();
     });
 
     view.addEventListener('pageshow', function () {
-        initTabs();
-        loadSummary();
-        loadStatus();
-        loadQueue();
-        loadConfig();
-        loadLedger();
+        ctx.loadPageData();
     });
 
     view.addEventListener('viewhide', function () {
@@ -1531,21 +1528,29 @@
     });
 
     // Initialize tabs and load initial state immediately
-    initTabs();
-    loadSummary();
-    loadStatus();
-    loadQueue();
-    loadConfig();
-    loadLedger();
+    ctx.loadPageData();
 }
 
     // 1. AMD Support for Jellyfin's RequireJS loader
     if (typeof define === 'function' && define.amd) {
         define([], function () {
             return function (view, params) {
+                // CRITICAL FIX: Call initQuickStrmPage immediately as the very first line!
                 initQuickStrmPage(view);
+
+                view.addEventListener('viewshow', function () {
+                    initQuickStrmPage(view);
+                });
+                view.addEventListener('pageshow', function () {
+                    initQuickStrmPage(view);
+                });
             };
         });
+
+        // Fallback: If configPage.js was loaded via the <script> tag injector or <img> rather than RequireJS,
+        // RequireJS define() registers the module but won't invoke the controller automatically.
+        // Run setTimeout fallback to bind and initialize #QuickStrmConfigPage if already in DOM.
+        setTimeout(bootstrap, 50);
     }
 
     // 2. Event-driven lifecycle binding on document for Jellyfin / Emby viewshow and pageshow
@@ -1562,14 +1567,16 @@
     document.addEventListener('pageshow', onPageLifecycle);
 
     // 3. Immediate execution if page element is already present in DOM
-    var existingPage = document.querySelector('#QuickStrmConfigPage') || document.querySelector('#QuickStrmConfigurationPage');
-    if (existingPage) {
-        existingPage.addEventListener('viewshow', function () {
-            initQuickStrmPage(existingPage);
-        });
-        existingPage.addEventListener('pageshow', function () {
-            initQuickStrmPage(existingPage);
-        });
-        initQuickStrmPage(existingPage);
+    function bootstrap() {
+        var page = document.querySelector('#QuickStrmConfigPage') || document.querySelector('#QuickStrmConfigurationPage');
+        if (page) {
+            initQuickStrmPage(page);
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootstrap);
+    } else {
+        bootstrap();
     }
 })();
