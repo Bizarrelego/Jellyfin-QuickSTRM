@@ -12,8 +12,8 @@
         "changelog": "\ud83d\udee0\ufe0f Bulletproof Dashboard Tab Switching & Tactile Button Feedback\nTargeted stability and UX enhancement release fixing script execution under Jellyfin's AMD module loader, introducing bulletproof event-delegated tab navigation, and adding instant tactile button spinners across administrative actions.\nFixed\n- **Jellyfin 12.x AMD Script Loading & SPA Initialization**:\n  - Added `data-controller=\"__plugin/QuickStrm.js\"` to the root page element in `configPage.html` and registered dual `QuickStrm.js` / `QuickSTRM.js` page handlers in `Plugin.cs`.\n  - Wrapped `configPage.js` in a universal UMD/AMD wrapper supporting Jellyfin's RequireJS AMD `define()` loader, document/view `viewshow`/`pageshow` lifecycle listeners, and immediate execution guards (`data-quickstrm-init`) preventing redundant double-binding.\n- **Bulletproof Event-Delegated Tab Switching**:\n  - Replaced single-pass query selector loops with container-level event delegation on `view`.\n  - Enforced strict `style.display = 'block'` / `'none'` overrides alongside `.active` CSS toggles, preventing Jellyfin core theme styles from locking tab panel visibility.\nAdded\n- **Instant Tactile Feedback on Probe & Admin Actions**:\n  - Implemented immediate (0ms) tactile button feedback on `#btnStartProbe`: instantly disables the control and mode selector, changes button text to `<span class=\"quickstrm-btn-spinner\"></span> Queueing Media...` with wait cursor, fires `Dashboard.showLoadingMsg()`, updates status text to cyan, and activates indeterminate progress animation before awaiting network response.\n  - Added `.quickstrm-btn-spinner` inline rotating ring animation to `btnStartProbe`, `btnRewriteUrls`, `btnSaveArrInstance`, and `btnTestArrConnection`.",
         "targetAbi": "12.2.0.0",
         "sourceUrl": "https://github.com/Bizarrelego/Jellyfin-QuickSTRM/releases/download/v3.1.1/QuickSTRM.zip",
-        "checksum": "",
-        "timestamp": "2026-10-21T18:35:11Z"
+        "checksum": "02211A6FDB93DF9EE154F1F36AE20535",
+        "timestamp": "2026-10-21T21:49:06Z"
       },
       {
         "version": "3.1.0",
