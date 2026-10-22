@@ -19,3 +19,6 @@ Thumbs.db
 QuickSTRM.zip
 QuickSTRM.dll
 RELEASE_NOTES.md
+
+# Local test suite
+QuickSTRM.Tests/

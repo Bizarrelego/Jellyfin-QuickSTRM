@@ -4,9 +4,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>QuickSTRM</RootNamespace>
     <AssemblyName>QuickSTRM</AssemblyName>
-    <Version>3.1.4</Version>
-    <AssemblyVersion>3.1.4</AssemblyVersion>
-    <FileVersion>3.1.4</FileVersion>
+    <Version>3.2.0</Version>
+    <AssemblyVersion>3.2.0</AssemblyVersion>
+    <FileVersion>3.2.0</FileVersion>
     <Authors>Bizarrelego</Authors>
     <RepositoryUrl>https://github.com/Bizarrelego/Jellyfin-QuickSTRM</RepositoryUrl>
     <PackageProjectUrl>https://github.com/Bizarrelego/Jellyfin-QuickSTRM</PackageProjectUrl>
@@ -31,6 +31,17 @@
     <None Remove="Configuration\configPage.js" />
     <EmbeddedResource Include="Configuration\configPage.html" />
     <EmbeddedResource Include="Configuration\configPage.js" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>QuickSTRM.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="QuickSTRM.Tests\**" />
+    <None Remove="QuickSTRM.Tests\**" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,6 @@
 using System;
+using System.Buffers;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -6,6 +8,7 @@ using System.Net.Http;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Win32.SafeHandles;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.IO;
@@ -641,7 +644,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     // Hold-open retry loop delays: 4 attempts over ~8s total (1s, 2s, 2s, 3s)
-    private static readonly TimeSpan[] HoldOpenRetryDelays =
+    internal static TimeSpan[] HoldOpenRetryDelays =
     {
         TimeSpan.FromSeconds(1),
         TimeSpan.FromSeconds(2),
@@ -674,7 +677,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         return false;
     }
 
-    private static void CacheResolvedUrl(string url, string resolvedUrl)
+    internal static void CacheResolvedUrl(string url, string resolvedUrl)
     {
         if (_resolvedUrlCache.Count > 1000)
         {
@@ -692,7 +695,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     // Lightweight client with AllowAutoRedirect disabled for single-hop redirect pre-resolution
-    private static readonly HttpClient _redirectResolutionClient = new(new SocketsHttpHandler
+    internal static HttpClient _redirectResolutionClient = new(new SocketsHttpHandler
     {
         AllowAutoRedirect = false,
         PooledConnectionLifetime = TimeSpan.FromMinutes(5)
@@ -701,109 +704,187 @@ public sealed class ProbeService : IHostedService, IDisposable
         Timeout = TimeSpan.FromSeconds(3)
     };
 
+    // Lock-free coalescing for concurrent requests on the same .strm file
+    private static readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inflightFileReads = new(StringComparer.OrdinalIgnoreCase);
+    internal static int FileReadExecutionCount;
+
     /// <summary>
     /// Reads only the first non-empty line of a .strm file up to 4096 characters,
     /// avoiding large object heap (LOH) allocations on corrupted or binary files.
     /// Executes a lightweight HTTP HEAD request with User-Agent: Lavf/60.3.100 and AllowAutoRedirect = false
     /// to pre-resolve 301, 302, 307, and 308 redirects, falling back to GET Range: bytes=0-0 on 405/403,
     /// with a 15-minute cache TTL and a hold-open retry loop for newly added / mounting targets.
+    /// Implements lock-free thundering-herd coalescing using ConcurrentDictionary and Lazy&lt;Task&lt;string?&gt;&gt;.
     /// </summary>
     public static async Task<string?> ReadStrmUrlAsync(string path, CancellationToken ct = default)
     {
-        FileStream? stream = null;
+        if (string.IsNullOrEmpty(path))
+        {
+            return null;
+        }
+
+        var lazy = _inflightFileReads.GetOrAdd(
+            path,
+            p => new Lazy<Task<string?>>(() => ReadStrmUrlCoreAsync(p, ct), LazyThreadSafetyMode.ExecutionAndPublication));
+
         try
         {
-            for (var attempt = 0; attempt <= HoldOpenRetryDelays.Length; attempt++)
+            var result = await lazy.Value.ConfigureAwait(false);
+            // Evict after burst window to coalesce high-volume thundering herds
+            _ = Task.Delay(1000).ContinueWith(_ =>
             {
-                try
+                ((ICollection<KeyValuePair<string, Lazy<Task<string?>>>>)_inflightFileReads)
+                    .Remove(new KeyValuePair<string, Lazy<Task<string?>>>(path, lazy));
+            }, TaskScheduler.Default);
+            return result;
+        }
+        catch
+        {
+            ((ICollection<KeyValuePair<string, Lazy<Task<string?>>>>)_inflightFileReads)
+                .Remove(new KeyValuePair<string, Lazy<Task<string?>>>(path, lazy));
+            throw;
+        }
+    }
+
+    private static async Task<string?> ReadStrmUrlCoreAsync(string path, CancellationToken ct)
+    {
+        Interlocked.Increment(ref FileReadExecutionCount);
+
+        SafeFileHandle? handle = null;
+        for (var attempt = 0; attempt <= HoldOpenRetryDelays.Length; attempt++)
+        {
+            try
+            {
+                handle = File.OpenHandle(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite,
+                    FileOptions.None);
+                break;
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException && attempt < HoldOpenRetryDelays.Length)
+            {
+                await Task.Delay(HoldOpenRetryDelays[attempt], ct).ConfigureAwait(false);
+            }
+        }
+
+        if (handle is null)
+        {
+            return null;
+        }
+
+        var buffer = ArrayPool<byte>.Shared.Rent(4096);
+        int read;
+        try
+        {
+            using (handle)
+            {
+                read = await RandomAccess.ReadAsync(handle, buffer.AsMemory(0, 4096), 0, ct).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+            throw;
+        }
+
+        if (read <= 0)
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+            return null;
+        }
+
+        string? target = null;
+        try
+        {
+            ReadOnlySpan<byte> span = buffer.AsSpan(0, read);
+
+            // Strip UTF-8 BOM if present (0xEF, 0xBB, 0xBF)
+            if (span.Length >= 3 && span[0] == 0xEF && span[1] == 0xBB && span[2] == 0xBF)
+            {
+                span = span.Slice(3);
+            }
+
+            while (!span.IsEmpty)
+            {
+                int lineEnd = span.IndexOfAny((byte)'\r', (byte)'\n');
+                ReadOnlySpan<byte> lineBytes = lineEnd >= 0 ? span.Slice(0, lineEnd) : span;
+
+                if (lineEnd >= 0)
                 {
-                    stream = new FileStream(
-                        path,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.ReadWrite,
-                        bufferSize: 4096,
-                        options: FileOptions.Asynchronous | FileOptions.SequentialScan);
-                    break;
+                    span = span.Slice(lineEnd);
+                    while (!span.IsEmpty && (span[0] == (byte)'\r' || span[0] == (byte)'\n'))
+                    {
+                        span = span.Slice(1);
+                    }
                 }
-                catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException && attempt < HoldOpenRetryDelays.Length)
+                else
                 {
-                    await Task.Delay(HoldOpenRetryDelays[attempt], ct).ConfigureAwait(false);
+                    span = ReadOnlySpan<byte>.Empty;
                 }
-            }
 
-            if (stream is null)
-            {
-                return null;
-            }
+                lineBytes = lineBytes.Trim((byte)' ');
+                lineBytes = lineBytes.Trim((byte)'\t');
+                lineBytes = lineBytes.Trim((byte)'\r');
+                lineBytes = lineBytes.Trim((byte)'\n');
 
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-            var buffer = new char[4096];
-            var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false);
-            if (read <= 0)
-            {
-                return null;
-            }
-
-            var text = new string(buffer, 0, read);
-            using var lineReader = new StringReader(text);
-            string? line;
-            while ((line = lineReader.ReadLine()) != null)
-            {
-                var trimmed = line.Trim();
-                if (string.IsNullOrEmpty(trimmed))
+                if (lineBytes.IsEmpty)
                 {
                     continue;
                 }
 
-                // If target local path does not exist yet: hold-open retry loop
-                if (Path.IsPathRooted(trimmed) && !trimmed.Contains("://", StringComparison.Ordinal))
-                {
-                    if (File.Exists(trimmed))
-                    {
-                        return trimmed;
-                    }
-
-                    foreach (var delay in HoldOpenRetryDelays)
-                    {
-                        await Task.Delay(delay, ct).ConfigureAwait(false);
-                        if (File.Exists(trimmed))
-                        {
-                            return trimmed;
-                        }
-                    }
-
-                    return trimmed;
-                }
-
-                if (TryGetResolvedUrl(trimmed, out var cached))
-                {
-                    return cached;
-                }
-
-                if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)
-                    && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
-                {
-                    return await ResolveHttpRedirectWithHoldOpenAsync(trimmed, uri, ct).ConfigureAwait(false);
-                }
-
-                return trimmed;
+                target = Encoding.UTF8.GetString(lineBytes);
+                break;
             }
-
-            return null;
         }
         finally
         {
-            if (stream is not null)
-            {
-                await stream.DisposeAsync().ConfigureAwait(false);
-            }
+            ArrayPool<byte>.Shared.Return(buffer);
         }
+
+        if (string.IsNullOrEmpty(target))
+        {
+            return null;
+        }
+
+        // If target local path does not exist yet: hold-open retry loop
+        if (Path.IsPathRooted(target) && !target.Contains("://", StringComparison.Ordinal))
+        {
+            if (File.Exists(target))
+            {
+                return target;
+            }
+
+            foreach (var delay in HoldOpenRetryDelays)
+            {
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+                if (File.Exists(target))
+                {
+                    return target;
+                }
+            }
+
+            return target;
+        }
+
+        if (TryGetResolvedUrl(target, out var cached))
+        {
+            return cached;
+        }
+
+        if (Uri.TryCreate(target, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            return await ResolveHttpRedirectWithHoldOpenAsync(target, uri, ct).ConfigureAwait(false);
+        }
+
+        return target;
     }
 
     private const int MaxRedirectHops = 5;
 
-    private static async Task<string> ResolveHttpRedirectWithHoldOpenAsync(string originalUrl, Uri uri, CancellationToken ct)
+    internal static async Task<string> ResolveHttpRedirectWithHoldOpenAsync(string originalUrl, Uri uri, CancellationToken ct)
     {
         for (var attempt = 0; attempt <= HoldOpenRetryDelays.Length; attempt++)
         {
@@ -1302,7 +1383,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
     }
 
-    private async Task<MediaInfo?> ProbeOneInlineAsync(
+    internal async Task<MediaInfo?> ProbeOneInlineAsync(
         MediaSourceInfo source,
         CancellationToken budgetToken,
         CancellationToken ct,
@@ -1503,11 +1584,98 @@ public sealed class ProbeService : IHostedService, IDisposable
         return Task.CompletedTask;
     }
 
-    private async Task ScanAndQueueLibraryAsync(ProbeMode mode)
+    internal static int ScanPageSize { get; set; } = 5000;
+    internal static int ScanPacingDelayMs { get; set; } = 0;
+
+    /// <summary>
+    /// Vectorized/fast single-pass unprobed item identification for massive libraries.
+    /// Evaluates RunTimeTicks and dimensions in $O(1)$ without object instantiation.
+    /// </summary>
+    internal static List<BaseItem> IdentifyUnprobedItems(IReadOnlyList<BaseItem> items, bool isIncremental = true)
+    {
+        var count = items.Count;
+        if (items is BaseItem[] array && array.Length >= 50_000)
+        {
+            var numPartitions = Math.Max(1, Environment.ProcessorCount);
+            var partitionSize = (array.Length + numPartitions - 1) / numPartitions;
+            var partialResults = new List<BaseItem>[numPartitions];
+
+            Parallel.For(0, numPartitions, p =>
+            {
+                var start = p * partitionSize;
+                var end = Math.Min(start + partitionSize, array.Length);
+                var localList = new List<BaseItem>(Math.Min(end - start, 8192));
+
+                for (var i = start; i < end; i++)
+                {
+                    var item = array[i];
+                    if (isIncremental && (item.RunTimeTicks.GetValueOrDefault() > 0 || (item.Width > 0 && item.Height > 0)))
+                    {
+                        continue;
+                    }
+
+                    var path = item.Path;
+                    if (path is not null && path.Length >= 5 &&
+                        path[^5] == '.' &&
+                        (path[^4] | 0x20) == 's' &&
+                        (path[^3] | 0x20) == 't' &&
+                        (path[^2] | 0x20) == 'r' &&
+                        (path[^1] | 0x20) == 'm')
+                    {
+                        localList.Add(item);
+                    }
+                }
+
+                partialResults[p] = localList;
+            });
+
+            var totalUnprobed = 0;
+            for (var p = 0; p < numPartitions; p++)
+            {
+                totalUnprobed += partialResults[p]?.Count ?? 0;
+            }
+
+            var combined = new List<BaseItem>(totalUnprobed);
+            for (var p = 0; p < numPartitions; p++)
+            {
+                if (partialResults[p] != null)
+                {
+                    combined.AddRange(partialResults[p]);
+                }
+            }
+            return combined;
+        }
+
+        var unprobed = new List<BaseItem>(Math.Min(count, 32768));
+
+        for (var i = 0; i < count; i++)
+        {
+            var item = items[i];
+            if (isIncremental && (item.RunTimeTicks.GetValueOrDefault() > 0 || (item.Width > 0 && item.Height > 0)))
+            {
+                continue;
+            }
+
+            var path = item.Path;
+            if (path is not null && path.Length >= 5 &&
+                path[^5] == '.' &&
+                (path[^4] | 0x20) == 's' &&
+                (path[^3] | 0x20) == 't' &&
+                (path[^2] | 0x20) == 'r' &&
+                (path[^1] | 0x20) == 'm')
+            {
+                unprobed.Add(item);
+            }
+        }
+
+        return unprobed;
+    }
+
+    internal async Task ScanAndQueueLibraryAsync(ProbeMode mode)
     {
         var isIncremental = mode == ProbeMode.Incremental || mode == ProbeMode.OnlyUnprobed;
         var offset = 0;
-        const int pageSize = 500;
+        var pageSize = ScanPageSize;
         var enqueuedCount = 0;
 
         _logger.LogInformation("QuickSTRM: Starting background library scan for {Mode} probe", mode);
@@ -1529,36 +1697,22 @@ public sealed class ProbeService : IHostedService, IDisposable
                 break;
             }
 
-            foreach (var item in batch)
+            var unprobedBatch = IdentifyUnprobedItems(batch, isIncremental);
+            for (var i = 0; i < unprobedBatch.Count; i++)
             {
-                if (item.Path is not null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+                var item = unprobedBatch[i];
+                if (isIncremental && _mediaSourceManager != null)
                 {
-                    if (isIncremental)
+                    var streams = _mediaSourceManager.GetMediaStreams(item.Id);
+                    if (streams != null && streams.Count > 0)
                     {
-                        var hasRuntime = item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0;
-                        var hasDimensions = item.Width > 0 && item.Height > 0;
-
-                        // In Jellyfin, probed items already have RunTimeTicks or dimensions populated on BaseItem
-                        if (hasRuntime || hasDimensions)
-                        {
-                            continue;
-                        }
-
-                        // Only call _mediaSourceManager.GetMediaStreams(item.Id) if those properties are missing
-                        if (_mediaSourceManager != null)
-                        {
-                            var streams = _mediaSourceManager.GetMediaStreams(item.Id);
-                            if (streams != null && streams.Count > 0)
-                            {
-                                continue;
-                            }
-                        }
+                        continue;
                     }
+                }
 
-                    if (EnqueueBackgroundPersist(item, highPriority: false, force: !isIncremental))
-                    {
-                        enqueuedCount++;
-                    }
+                if (EnqueueBackgroundPersist(item, highPriority: false, force: !isIncremental))
+                {
+                    enqueuedCount++;
                 }
             }
 
@@ -1568,13 +1722,16 @@ public sealed class ProbeService : IHostedService, IDisposable
                 break;
             }
 
-            try
+            if (ScanPacingDelayMs > 0)
             {
-                await Task.Delay(5, _shutdownCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
+                try
+                {
+                    await Task.Delay(ScanPacingDelayMs, _shutdownCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
 

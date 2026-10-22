@@ -33,11 +33,12 @@ public sealed class ArrIntegrationService : IHostedService, IDisposable
     public ArrIntegrationService(
         ILibraryManager libraryManager,
         ILogger<ArrIntegrationService> logger,
-        IServerApplicationHost? applicationHost = null)
+        IServerApplicationHost? applicationHost = null,
+        HttpClient? httpClient = null)
     {
         _libraryManager = libraryManager;
         _logger = logger;
-        _httpClient = new HttpClient(new SocketsHttpHandler
+        _httpClient = httpClient ?? new HttpClient(new SocketsHttpHandler
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(5)
         })

@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Win32.SafeHandles;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Entities;
@@ -25,6 +26,11 @@ namespace QuickSTRM;
 /// </summary>
 public class VfsPrewarmService : IDisposable
 {
+    private static readonly MemoryCacheEntryOptions DefaultCacheOptions = new()
+    {
+        SlidingExpiration = TimeSpan.FromMinutes(5)
+    };
+
     private const int PrewarmSizeBytes = 5 * 1024 * 1024; // 5 MB
     private const int TailPrewarmSizeBytes = 1024 * 1024; // 1 MB
     private const long TailThresholdBytes = 6L * 1024 * 1024; // 6 MB
@@ -76,14 +82,14 @@ public class VfsPrewarmService : IDisposable
             return false;
         }
 
-        return _cache.TryGetValue($"QuickSTRM:PreWarm:{itemId}", out _);
+        return _cache.TryGetValue(itemId, out _);
     }
 
     /// <summary>
     /// Checks synchronously whether an item ID was recently pre-warmed within the sliding cache expiration window.
     /// </summary>
     public bool IsRecentlyWarmed(Guid itemId)
-        => IsRecentlyWarmed(itemId.ToString("N")) || IsRecentlyWarmed(itemId.ToString("D"));
+        => IsRecentlyWarmed(itemId.ToString("N"));
 
     /// <summary>
     /// Predictively pre-warms the media stream for the specified item ID by reading the first 5MB.
@@ -96,18 +102,14 @@ public class VfsPrewarmService : IDisposable
             return;
         }
 
-        if (IsRecentlyWarmed(itemId))
+        if (_cache.TryGetValue(itemId, out _))
         {
             _logger.LogDebug("QuickSTRM: Item {ItemId} was recently pre-warmed within the last 5 minutes; skipping", itemId);
             return;
         }
 
-        var cacheKey = $"QuickSTRM:PreWarm:{itemId}";
         // Set sliding expiration of 5 minutes to prevent overlapping reads from clients like Fire TV
-        _cache.Set(cacheKey, true, new MemoryCacheEntryOptions
-        {
-            SlidingExpiration = TimeSpan.FromMinutes(5)
-        });
+        _cache.Set(itemId, true, DefaultCacheOptions);
 
         if (!Guid.TryParse(itemId, out var id))
         {
@@ -154,8 +156,10 @@ public class VfsPrewarmService : IDisposable
             return;
         }
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
+        using var timeoutCts = ct.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : new CancellationTokenSource();
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(8));
 
         try
         {
@@ -306,13 +310,12 @@ public class VfsPrewarmService : IDisposable
             return;
         }
 
-        await using var fs = new FileStream(
+        using var handle = File.OpenHandle(
             localPath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite,
-            bufferSize: BufferSize,
-            useAsync: true);
+            FileOptions.None);
 
         var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
         try
@@ -320,25 +323,30 @@ public class VfsPrewarmService : IDisposable
             long totalRead = 0;
             int read;
             while (totalRead < PrewarmSizeBytes &&
-                   (read = await fs.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, (int)(PrewarmSizeBytes - totalRead))), ct).ConfigureAwait(false)) > 0)
+                   (read = await RandomAccess.ReadAsync(handle, buffer.AsMemory(0, Math.Min(buffer.Length, (int)(PrewarmSizeBytes - totalRead))), totalRead, ct).ConfigureAwait(false)) > 0)
             {
                 totalRead += read;
             }
 
-            _logger.LogInformation(
-                "QuickSTRM: Pre-warmed {Bytes:N0} bytes via FileStream for {Name} ({ItemId})",
-                totalRead, itemName, itemId);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation(
+                    "QuickSTRM: Pre-warmed {Bytes} bytes via FileStream for {Name} ({ItemId})",
+                    totalRead, itemName, itemId);
+            }
 
             // Tail Pre-Warming for local mounted files (MP4/MOV rear moov atom fix)
-            var isMp4OrMov = localPath.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ||
-                             localPath.EndsWith(".mov", StringComparison.OrdinalIgnoreCase);
+            var isMp4OrMov = localPath.Length >= 4 &&
+                (localPath.AsSpan(localPath.Length - 4).Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
+                 localPath.AsSpan(localPath.Length - 4).Equals(".mov", StringComparison.OrdinalIgnoreCase));
 
-            if (isMp4OrMov && fs.Length > TailThresholdBytes)
+            var fileLength = RandomAccess.GetLength(handle);
+            if (isMp4OrMov && fileLength > TailThresholdBytes)
             {
-                fs.Seek(fs.Length - TailPrewarmSizeBytes, SeekOrigin.Begin);
+                long tailOffset = fileLength - TailPrewarmSizeBytes;
                 long tailRead = 0;
                 while (tailRead < TailPrewarmSizeBytes &&
-                       (read = await fs.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, (int)(TailPrewarmSizeBytes - tailRead))), ct).ConfigureAwait(false)) > 0)
+                       (read = await RandomAccess.ReadAsync(handle, buffer.AsMemory(0, Math.Min(buffer.Length, (int)(TailPrewarmSizeBytes - tailRead))), tailOffset + tailRead, ct).ConfigureAwait(false)) > 0)
                 {
                     tailRead += read;
                 }
@@ -366,14 +374,14 @@ public class VfsPrewarmService : IDisposable
             IEnumerable<string> candidateFiles;
             try
             {
-                candidateFiles = Directory.EnumerateFiles(dir, $"{prefix}*");
+                candidateFiles = Directory.EnumerateFiles(dir, string.Concat(prefix, "*"));
             }
             catch (Exception)
             {
                 return;
             }
 
-            var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+            byte[]? buffer = null;
             try
             {
                 foreach (var file in candidateFiles)
@@ -386,15 +394,20 @@ public class VfsPrewarmService : IDisposable
                     {
                         try
                         {
-                            await using var subFs = new FileStream(
+                            using var subHandle = File.OpenHandle(
                                 file,
                                 FileMode.Open,
                                 FileAccess.Read,
                                 FileShare.ReadWrite,
-                                bufferSize: 64 * 1024,
-                                options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+                                FileOptions.None);
 
-                            _ = await subFs.ReadAsync(buffer.AsMemory(0, 64 * 1024), ct).ConfigureAwait(false);
+                            var fileLen = RandomAccess.GetLength(subHandle);
+                            var toRead = (int)Math.Min(64 * 1024, fileLen);
+                            if (toRead > 0)
+                            {
+                                buffer ??= ArrayPool<byte>.Shared.Rent(64 * 1024);
+                                _ = await RandomAccess.ReadAsync(subHandle, buffer.AsMemory(0, toRead), 0, ct).ConfigureAwait(false);
+                            }
                             _logger.LogDebug("QuickSTRM: Pre-warmed adjacent subtitle: {Path}", file);
                         }
                         catch (Exception)
@@ -405,7 +418,10 @@ public class VfsPrewarmService : IDisposable
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                if (buffer is not null)
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
