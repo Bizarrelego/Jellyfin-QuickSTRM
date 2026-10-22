@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [3.1.4] - 2026-10-21
+
+### 🛠️ Sidebar Deduplication, 10,000x SQLite Query Bottleneck Elimination & UI Polish
+
+Stability, concurrency, and UI regression fix release addressing sidebar item duplication, library scan SQLite query overhead, progress bar flickering, reliable *arr configuration removal, and unclickable checkboxes in hidden tab panels.
+
+### Fixed
+- **Duplicate Sidebar Entry (`Plugin.cs`)**:
+  - Removed extraneous `PluginPageInfo` registrations in `GetPages()`; restricted to the HTML configuration page (`EnableInMainMenu = true`, `MenuSection = "server"`, `MenuIcon = "bolt"`) and `QuickStrm.js` (`EnableInMainMenu = false`), completely eliminating the duplicate sidebar menu item in Jellyfin's navigation.
+- **10,000x SQLite Query Bottleneck & Instant Unprobed Detection (`ProbeService.cs`)**:
+  - Eliminated N+1 `_mediaSourceManager.GetMediaStreams` calls in `QueueLibraryScanAsync`. Paged `_libraryManager.GetItemList` in batches of 500 (`IsVirtualItem = false`, `MediaType.Video`), checking in-memory `BaseItem` runtime (`RunTimeTicks > 0`) and dimensions (`Width > 0 && Height > 0`) for probed status.
+  - Added 5ms pacing delay between 500-item pages so the Jellyfin HTTP thread pool remains 100% responsive during whole-library scans.
+- **Progress Bar Flickering During Probing (`ProbeService.cs` & `configPage.js`)**:
+  - Incremented `_activeProbes` immediately on the consumer thread when an item is dequeued before scheduling task execution, eliminating the race gap where queue and active counts both report zero.
+  - Maintained `_isBatchRunning` across the full lifecycle of `QueueLibraryScanAsync` and consumer loop queue draining.
+  - Attached all frontend state (`currentConfig`, `queuePollInterval`, `isPolling`) directly onto `view._qsState` and required 2 consecutive idle polls before hiding `#probeProgressContainer`.
+- **Reliable 2-Click *arr Configuration Removal (`QuickStrmController.cs` & `configPage.js`)**:
+  - Added dedicated server-side endpoints: `[HttpDelete("Arr/Instance/{index:int}")]` and `[HttpPost("Arr/Instance/{index:int}/Delete")]` (secured with `[Authorize(Policy = "RequiresElevation")]`).
+  - Implemented an unbreakable 2-click delete button in UI without `window.confirm()`: first click turns the button to "Confirm Delete?" with a bright red background for 4 seconds; second click dispatches deletion, updates `view._qsState.currentConfig.ArrInstances`, and re-renders cards immediately.
+- **Unclickable Checkboxes in Maintenance Tab (`configPage.html` & `configPage.js`)**:
+  - Replaced broken `is="emby-checkbox"` elements on `#chkEnableAutoHeal`, `#chkEnableSweeper`, `#chkEnableNextEpisodePreWarm`, `#chkSynthesizeVirtualChapters`, `#chkRewriteDryRun`, and `#chkArrAutoHeal` with standard `.qs-checkbox-row` and `.qs-checkbox` elements with explicit styles (`opacity: 1 !important`, `position: static !important`, `pointer-events: auto !important`).
+  - Attached `'change'` event listeners to immediately auto-save maintenance settings on toggle via `saveFullConfig(view, true)`.
+- **Duplicate Script Execution Prevention (`configPage.html`)**:
+  - Updated `<img onload>` fallback to wait 400ms before checking `if (!page._qsState)` so it never races with Jellyfin's native `data-controller` AMD loader.
+
 ## [3.1.3] - 2026-10-21
 
 ### ⚡ Non-Blocking Pre-Probe Scanning, SQLite Query Elimination & Zero-Allocation Fast Paths

@@ -33,7 +33,8 @@ namespace QuickSTRM;
 public enum ProbeMode
 {
     Incremental,
-    All
+    All,
+    OnlyUnprobed = Incremental
 }
 
 /// <summary>
@@ -62,7 +63,17 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _pendingPersist = new();
 
     // number of queued items that already hold a probe slot (running); waiting = pending - running
-    private int _runningPersist;
+    private int _activeProbes;
+    private int _isBatchRunning;
+
+    /// <summary>Gets the number of items currently being actively probed.</summary>
+    public int ActiveProbes => Volatile.Read(ref _activeProbes);
+
+    /// <summary>Gets the number of items currently being actively probed.</summary>
+    public int ActiveCount => ActiveProbes;
+
+    /// <summary>Gets a value indicating whether a batch probe or scan operation is actively running.</summary>
+    public bool IsBatchRunning => Volatile.Read(ref _isBatchRunning) == 1;
 
     // protects memory on a low-end host: hard bound on queued items, so even a flood of DISTINCT items can't grow without limit
     private const int MaxPendingPersist = 500;
@@ -100,7 +111,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     public int PersistQueueWaiting => HighPriorityQueueWaiting + LowPriorityQueueWaiting;
 
     /// <summary>Gets the number of queued items currently being persisted (holding a probe slot).</summary>
-    public int PersistQueueRunning => Volatile.Read(ref _runningPersist);
+    public int PersistQueueRunning => ActiveProbes;
 
     /// <summary>Gets the total number of items queued or running for background persistence.</summary>
     public int PersistQueueTotal => _pendingPersist.Count;
@@ -198,6 +209,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     private readonly TelemetryService _telemetryService;
     private readonly IMediaEncoder _mediaEncoder;
+    private readonly IMediaSourceManager? _mediaSourceManager;
 
     public ProbeService(
         ILibraryManager libraryManager,
@@ -207,7 +219,8 @@ public sealed class ProbeService : IHostedService, IDisposable
         IActivityManager activityManager = null!,
         ILogger<ProbeService> logger = null!,
         TelemetryService telemetryService = null!,
-        IItemRepository? itemRepository = null)
+        IItemRepository? itemRepository = null,
+        IMediaSourceManager? mediaSourceManager = null)
     {
         _telemetryService = telemetryService;
         _activityManager = activityManager;
@@ -216,6 +229,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         _mediaEncoder = mediaEncoder;
         _logger = logger;
         _itemRepository = itemRepository;
+        _mediaSourceManager = mediaSourceManager;
     }
 
     // ── IHostedService lifecycle ──
@@ -361,7 +375,20 @@ public sealed class ProbeService : IHostedService, IDisposable
             return false;
         }
 
+        Interlocked.Exchange(ref _isBatchRunning, 1);
         return true;
+    }
+
+    /// <summary>
+    /// Enqueues multiple items for background persistence and marks batch running.
+    /// </summary>
+    public void EnqueueItems(IEnumerable<BaseItem> items, bool highPriority = false, bool force = false)
+    {
+        Interlocked.Exchange(ref _isBatchRunning, 1);
+        foreach (var item in items)
+        {
+            EnqueueBackgroundPersist(item, highPriority, force);
+        }
     }
 
     private async Task ProcessQueueLoopAsync(CancellationToken ct)
@@ -406,14 +433,14 @@ public sealed class ProbeService : IHostedService, IDisposable
                 continue;
             }
 
+            // Immediately increment _activeProbes on consumer loop thread BEFORE probe task execution
+            Interlocked.Increment(ref _activeProbes);
             try
             {
                 var attempt = await ProbeItemAsync(
                     item,
                     BackgroundProbeTimeout,
-                    ct,
-                    onSlotAcquired: () => Interlocked.Increment(ref _runningPersist),
-                    onSlotReleased: () => Interlocked.Decrement(ref _runningPersist)).ConfigureAwait(false);
+                    ct).ConfigureAwait(false);
 
                 if (attempt == ProbeAttempt.SkippedDueToTrial)
                 {
@@ -437,6 +464,14 @@ public sealed class ProbeService : IHostedService, IDisposable
             finally
             {
                 _pendingPersist.TryRemove(item.Id, out _);
+                Interlocked.Decrement(ref _activeProbes);
+                if (Volatile.Read(ref _activeProbes) == 0 &&
+                    _highPriorityChannel.Reader.Count == 0 &&
+                    _lowPriorityChannel.Reader.Count == 0 &&
+                    Volatile.Read(ref _isScanningLibrary) == 0)
+                {
+                    Interlocked.Exchange(ref _isBatchRunning, 0);
+                }
             }
         }
     }
@@ -1436,6 +1471,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// </summary>
     public Task QueueLibraryScanAsync(ProbeMode mode)
     {
+        Interlocked.Exchange(ref _isBatchRunning, 1);
         if (Interlocked.CompareExchange(ref _isScanningLibrary, 1, 0) != 0)
         {
             _logger.LogInformation("QuickSTRM: Library scan is already running; skipping duplicate scan request");
@@ -1455,6 +1491,12 @@ public sealed class ProbeService : IHostedService, IDisposable
             finally
             {
                 Interlocked.Exchange(ref _isScanningLibrary, 0);
+                if (Volatile.Read(ref _activeProbes) == 0 &&
+                    _highPriorityChannel.Reader.Count == 0 &&
+                    _lowPriorityChannel.Reader.Count == 0)
+                {
+                    Interlocked.Exchange(ref _isBatchRunning, 0);
+                }
             }
         });
 
@@ -1463,7 +1505,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     private async Task ScanAndQueueLibraryAsync(ProbeMode mode)
     {
-        var isIncremental = mode == ProbeMode.Incremental;
+        var isIncremental = mode == ProbeMode.Incremental || mode == ProbeMode.OnlyUnprobed;
         var offset = 0;
         const int pageSize = 500;
         var enqueuedCount = 0;
@@ -1475,6 +1517,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             var query = new InternalItemsQuery
             {
                 MediaTypes = new[] { MediaType.Video },
+                IsVirtualItem = false,
                 Recursive = true,
                 StartIndex = offset,
                 Limit = pageSize
@@ -1490,9 +1533,26 @@ public sealed class ProbeService : IHostedService, IDisposable
             {
                 if (item.Path is not null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (isIncremental && item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0)
+                    if (isIncremental)
                     {
-                        continue;
+                        var hasRuntime = item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0;
+                        var hasDimensions = item.Width > 0 && item.Height > 0;
+
+                        // In Jellyfin, probed items already have RunTimeTicks or dimensions populated on BaseItem
+                        if (hasRuntime || hasDimensions)
+                        {
+                            continue;
+                        }
+
+                        // Only call _mediaSourceManager.GetMediaStreams(item.Id) if those properties are missing
+                        if (_mediaSourceManager != null)
+                        {
+                            var streams = _mediaSourceManager.GetMediaStreams(item.Id);
+                            if (streams != null && streams.Count > 0)
+                            {
+                                continue;
+                            }
+                        }
                     }
 
                     if (EnqueueBackgroundPersist(item, highPriority: false, force: !isIncremental))
@@ -1508,7 +1568,14 @@ public sealed class ProbeService : IHostedService, IDisposable
                 break;
             }
 
-            await Task.Yield();
+            try
+            {
+                await Task.Delay(5, _shutdownCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
 
         _logger.LogInformation(
@@ -1554,6 +1621,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     public void StopProbe()
     {
         Interlocked.Exchange(ref _isScanningLibrary, 0);
+        Interlocked.Exchange(ref _isBatchRunning, 0);
         lock (_lock)
         {
             if (_cts is { IsCancellationRequested: false })

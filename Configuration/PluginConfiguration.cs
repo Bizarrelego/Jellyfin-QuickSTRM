@@ -62,10 +62,30 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool EnableAutoProbe { get; set; }
 
     /// <summary>
+    /// Alias for EnableAutoProbe.
+    /// </summary>
+    [System.Xml.Serialization.XmlIgnore]
+    public bool EnableSweeper
+    {
+        get => EnableAutoProbe;
+        set => EnableAutoProbe = value;
+    }
+
+    /// <summary>
     /// Gets or sets a value indicating whether dead .strm files (failed probe/HEAD) are deleted from disk
     /// and removed from the library. Disabled while the circuit breaker is tripped.
     /// </summary>
     public bool EnableAutoDelete { get; set; }
+
+    /// <summary>
+    /// Alias for EnableAutoDelete.
+    /// </summary>
+    [System.Xml.Serialization.XmlIgnore]
+    public bool EnableAutoHeal
+    {
+        get => EnableAutoDelete;
+        set => EnableAutoDelete = value;
+    }
 
     /// <summary>
     /// Gets or sets the optional name of a marker file that exists on the cloud mount (searched up to 5 directory levels above

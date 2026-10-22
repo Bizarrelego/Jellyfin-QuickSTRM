@@ -174,13 +174,17 @@ public class QuickStrmController : ControllerBase
     [Authorize(Policy = "RequiresElevation")]
     public ActionResult GetQueue()
     {
-        var running = _probeService.PersistQueueRunning;
+        var running = _probeService.ActiveProbes;
         var waiting = _probeService.PersistQueueWaiting;
         var scanning = _probeService.IsScanningLibrary;
+        var isBatchRunning = _probeService.IsBatchRunning;
         return Ok(new
         {
             Waiting = waiting,
             Running = running,
+            ActiveCount = running,
+            QueueCount = waiting,
+            IsRunning = isBatchRunning || scanning || running > 0 || waiting > 0,
             Total = _probeService.PersistQueueTotal,
             HighPriorityWaiting = _probeService.HighPriorityQueueWaiting,
             LowPriorityWaiting = _probeService.LowPriorityQueueWaiting,
@@ -508,6 +512,42 @@ public class QuickStrmController : ControllerBase
             Success = success,
             Message = message
         });
+    }
+
+    /// <summary>
+    /// Removes a configured *arr instance by index.
+    /// </summary>
+    [HttpDelete("Arr/Instance/{index:int}")]
+    [HttpPost("Arr/Instance/{index:int}/Delete")]
+    [Authorize(Policy = "RequiresElevation")]
+    public ActionResult DeleteArrInstance([FromRoute] int index)
+    {
+        var config = Plugin.Instance?.Configuration;
+        if (config is null)
+        {
+            return NotFound(new { Message = "Plugin configuration not found." });
+        }
+
+        lock (config)
+        {
+            if (index < 0 || index >= config.ArrInstances.Count)
+            {
+                return BadRequest(new { Message = $"Invalid instance index {index}." });
+            }
+
+            var removed = config.ArrInstances[index];
+            config.ArrInstances.RemoveAt(index);
+            Plugin.Instance?.SaveConfiguration();
+
+            _logger.LogInformation("QuickSTRM: Removed *arr instance {Name} at index {Index}", removed.Name, index);
+            _ = _telemetryService.LogEventAsync("ArrSync", $"Removed *arr instance {removed.Name} ({removed.ArrType}).");
+
+            return Ok(new
+            {
+                Removed = true,
+                Instances = config.ArrInstances
+            });
+        }
     }
 
     /// <summary>

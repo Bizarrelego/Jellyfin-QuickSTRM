@@ -52,29 +52,14 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 Name = Name,
                 EmbeddedResourcePath = ns + ".Configuration.configPage.html",
                 EnableInMainMenu = true,
-                MenuIcon = "bolt"
-            },
-            new PluginPageInfo
-            {
-                Name = "QuickStrmConfigurationPage",
-                EmbeddedResourcePath = ns + ".Configuration.configPage.html",
-                EnableInMainMenu = true,
+                MenuSection = "server",
                 MenuIcon = "bolt"
             },
             new PluginPageInfo
             {
                 Name = "QuickStrm.js",
-                EmbeddedResourcePath = ns + ".Configuration.configPage.js"
-            },
-            new PluginPageInfo
-            {
-                Name = "QuickStrm",
-                EmbeddedResourcePath = ns + ".Configuration.configPage.js"
-            },
-            new PluginPageInfo
-            {
-                Name = "QuickSTRM.js",
-                EmbeddedResourcePath = ns + ".Configuration.configPage.js"
+                EmbeddedResourcePath = ns + ".Configuration.configPage.js",
+                EnableInMainMenu = false
             }
         };
     }

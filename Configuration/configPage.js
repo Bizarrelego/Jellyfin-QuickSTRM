@@ -45,12 +45,17 @@
         }
 
         view.dataset.quickstrmBound = 'true';
+        view._qsState = view._qsState || {
+            currentConfig: null,
+            queuePollInterval: null,
+            isPolling: false,
+            idlePollCount: 0,
+            editingInstanceIndex: -1,
+            probeTotalCount: 0
+        };
+        var qsState = view._qsState;
         var ctx = {};
         view._quickstrmContext = ctx;
-
-        var editingInstanceIndex = -1;
-        var queuePollInterval = null;
-        var probeTotalCount = 0;
 
         var pluginId = '1278dbd6-8399-46c0-8e64-31f2d9e022ae';
 
@@ -69,8 +74,10 @@
 
         // ── 2. Settings Form DOM references ──
         var form = view.querySelector('.quickStrmConfigurationForm');
-        var chkAutoProbe = view.querySelector('#chkEnableAutoProbe');
-        var chkAutoDelete = view.querySelector('#chkEnableAutoDelete');
+        var chkAutoProbe = view.querySelector('#chkEnableSweeper') || view.querySelector('#chkEnableAutoProbe');
+        var chkAutoDelete = view.querySelector('#chkEnableAutoHeal') || view.querySelector('#chkEnableAutoDelete');
+        var chkEnableAutoHeal = view.querySelector('#chkEnableAutoHeal') || chkAutoDelete;
+        var chkEnableSweeper = view.querySelector('#chkEnableSweeper') || chkAutoProbe;
         var chkNextEp = view.querySelector('#chkEnableNextEpisodePreWarm');
         var chkChapters = view.querySelector('#chkSynthesizeVirtualChapters');
         var txtMarker = view.querySelector('#txtMountMarkerFileName');
@@ -95,7 +102,7 @@
         var btnToggleApiKey = view.querySelector('#btnToggleApiKeyVisibility');
         var addPathFrom = view.querySelector('#addArrPathFrom');
         var addPathTo = view.querySelector('#addArrPathTo');
-        var addAutoHeal = view.querySelector('#addArrAutoHeal');
+        var addAutoHeal = view.querySelector('#chkArrAutoHeal') || view.querySelector('#addArrAutoHeal');
         var btnSaveAdd = view.querySelector('#btnSaveArrInstance') || view.querySelector('#btnSaveArrConnection');
         var btnCancelAdd = view.querySelector('#btnCancelArrInstance');
         var btnTestArr = view.querySelector('#btnTestArrConnection');
@@ -473,7 +480,8 @@
         }
     }
 
-    function pollQueueStatus() {
+    function pollQueueStatus(viewEl) {
+        var v = viewEl || view;
         var queueUrl = (typeof ApiClient.getUrl === 'function') ? ApiClient.getUrl('QuickStrm/Queue') : 'QuickStrm/Queue';
         var fetchPromise = (typeof ApiClient.getJSON === 'function')
             ? ApiClient.getJSON(queueUrl)
@@ -488,6 +496,11 @@
             var high = typeof data.HighPriorityWaiting === 'number' ? data.HighPriorityWaiting : 0;
             var running = typeof data.Running === 'number' ? data.Running : 0;
             var waiting = typeof data.Waiting === 'number' ? data.Waiting : (low + high);
+
+            var queueCount = typeof data.QueueCount === 'number' ? data.QueueCount : waiting;
+            var activeCount = typeof data.ActiveCount === 'number' ? data.ActiveCount : running;
+            var isScanning = data.ScanningLibrary === true;
+            var isRunningFlag = typeof data.IsRunning === 'boolean' ? data.IsRunning : (running > 0 || waiting > 0 || isScanning);
 
             // Map metrics to DOM
             if (lblQueue) { lblQueue.textContent = waiting + running; }
@@ -513,7 +526,22 @@
             cooldownEndsAt = Date.now() + (data.CooldownSecondsRemaining || 0) * 1000;
             renderCircuit();
 
-            var isScanning = data.ScanningLibrary === true;
+            // Evaluate idle condition: 2 consecutive idle polls required before hiding progress container
+            var isIdle = !isRunningFlag && !isScanning && queueCount === 0 && activeCount === 0;
+            if (isIdle) {
+                v._qsState.idlePollCount = (v._qsState.idlePollCount || 0) + 1;
+            } else {
+                v._qsState.idlePollCount = 0;
+            }
+
+            var progressContainer = v.querySelector('#probeProgressContainer') || v.querySelector('#probeProgressSection');
+            if (progressContainer) {
+                if (v._qsState.idlePollCount >= 2) {
+                    progressContainer.style.display = 'none';
+                } else {
+                    progressContainer.style.display = 'block';
+                }
+            }
 
             // If background scan is actively enumerating library items
             if (isScanning && low === 0 && running === 0) {
@@ -533,8 +561,7 @@
                 return;
             }
 
-            // Evaluate if LowPriorityWaiting === 0 and Running === 0 (and not scanning)
-            if (low === 0 && running === 0 && !isScanning) {
+            if (v._qsState.idlePollCount >= 2) {
                 if (lblStatus) {
                     lblStatus.textContent = 'Status: Idle';
                     lblStatus.style.color = '';
@@ -550,7 +577,7 @@
                     progressBar.style.width = '0%';
                 }
 
-                probeTotalCount = 0;
+                v._qsState.probeTotalCount = 0;
                 restoreProbeButton();
 
                 if (btnStart) {
@@ -560,10 +587,11 @@
                     btnStop.style.display = 'none';
                 }
 
-                if (queuePollInterval) {
-                    clearInterval(queuePollInterval);
-                    queuePollInterval = null;
+                if (v._qsState.queuePollInterval) {
+                    clearInterval(v._qsState.queuePollInterval);
+                    v._qsState.queuePollInterval = null;
                 }
+                v._qsState.isPolling = false;
 
                 loadSummary();
                 return;
@@ -578,13 +606,12 @@
             }
 
             // If a total count was captured at the start of the probe, calculate the completion percentage.
-            // Otherwise, implement an indeterminate CSS animation on .taskProgressInner while Running > 0.
-            if (probeTotalCount > 0) {
+            if (v._qsState.probeTotalCount > 0) {
                 if (progressBar) {
                     progressBar.classList.remove('indeterminate');
                     var remaining = low + running;
-                    var processed = Math.max(0, probeTotalCount - remaining);
-                    var pct = Math.min(100, Math.round((processed / probeTotalCount) * 100));
+                    var processed = Math.max(0, v._qsState.probeTotalCount - remaining);
+                    var pct = Math.min(100, Math.round((processed / v._qsState.probeTotalCount) * 100));
                     progressBar.style.width = pct + '%';
                     if (lblStatus) {
                         lblStatus.textContent = 'Status: Running (' + pct + '%)';
@@ -833,18 +860,55 @@
             });
         });
 
-        // Wire Remove buttons
+        // Wire Remove buttons (2-click confirmation pattern without window.confirm)
         var removeBtns = arrList.querySelectorAll('.btnDeleteInstance, .btn-remove-arr');
         removeBtns.forEach(function (btn) {
             btn.addEventListener('click', function (event) {
                 event.preventDefault();
                 event.stopPropagation();
                 var idx = parseInt(btn.getAttribute('data-index'), 10);
-                Dashboard.confirm("Are you sure you want to remove this connection?").then(function (result) {
-                    if (result) {
-                        removeArrInstance(idx);
+
+                if (btn.dataset.confirming === 'true') {
+                    if (btn._confirmTimeout) {
+                        clearTimeout(btn._confirmTimeout);
+                        btn._confirmTimeout = null;
                     }
-                });
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="quickstrm-spinner"></span> Deleting...';
+
+                    apiPost('QuickStrm/Arr/Instance/' + idx + '/Delete')
+                        .then(function (res) {
+                            if (res && res.Instances) {
+                                if (view._qsState) {
+                                    if (!view._qsState.currentConfig) {
+                                        view._qsState.currentConfig = {};
+                                    }
+                                    view._qsState.currentConfig.ArrInstances = res.Instances;
+                                }
+                                renderArrInstances(res.Instances);
+                            } else {
+                                loadConfig();
+                            }
+                        })
+                        .catch(function (err) {
+                            showAlert('Failed to remove connection: ' + extractErrorMessage(err));
+                            loadConfig();
+                        });
+                } else {
+                    btn.dataset.confirming = 'true';
+                    var origHtml = btn.innerHTML;
+                    var origBg = btn.style.background;
+                    btn.style.background = '#f44336';
+                    btn.style.color = '#ffffff';
+                    btn.innerHTML = '<span>Confirm Delete?</span>';
+
+                    btn._confirmTimeout = setTimeout(function () {
+                        btn.dataset.confirming = 'false';
+                        btn.style.background = origBg || '#b71c1c';
+                        btn.innerHTML = origHtml;
+                        btn._confirmTimeout = null;
+                    }, 4000);
+                }
             });
         });
     }
@@ -877,25 +941,26 @@
 
     function removeArrInstance(index) {
         showLoading();
-        ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-            var instances = config.ArrInstances || [];
-            var removed = instances.splice(index, 1)[0];
-            config.ArrInstances = instances;
-            return ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
-                if (removed && removed.ProvisionedWebhookId) {
-                    return apiPost('QuickStrm/Arr/TestAndSync').catch(function () {
-                        // ignore errors on sync during remove
-                    });
+        apiPost('QuickStrm/Arr/Instance/' + index + '/Delete')
+            .then(function (res) {
+                hideLoading();
+                if (res && res.Instances) {
+                    if (view._qsState) {
+                        if (!view._qsState.currentConfig) {
+                            view._qsState.currentConfig = {};
+                        }
+                        view._qsState.currentConfig.ArrInstances = res.Instances;
+                    }
+                    renderArrInstances(res.Instances);
+                } else {
+                    loadConfig();
                 }
+            })
+            .catch(function (err) {
+                hideLoading();
+                showAlert('Failed to remove connection: ' + extractErrorMessage(err));
+                loadConfig();
             });
-        }).then(function () {
-            hideLoading();
-            return loadConfig();
-        }).catch(function (err) {
-            hideLoading();
-            showAlert('Failed to remove connection: ' + extractErrorMessage(err));
-            loadConfig();
-        });
     }
 
     function clearAddForm() {
@@ -915,10 +980,63 @@
         if (addAutoHeal) { addAutoHeal.checked = true; }
     }
 
+    function saveFullConfig(viewEl, silent) {
+        var v = viewEl || view;
+        return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+            var chkSweeper = v.querySelector('#chkEnableSweeper') || v.querySelector('#chkEnableAutoProbe');
+            var chkAutoHeal = v.querySelector('#chkEnableAutoHeal') || v.querySelector('#chkEnableAutoDelete');
+            var chkNextEp = v.querySelector('#chkEnableNextEpisodePreWarm');
+            var chkChapters = v.querySelector('#chkSynthesizeVirtualChapters');
+            var txtMarker = v.querySelector('#txtMountMarkerFileName');
+            var txtJellyfinUrl = v.querySelector('#txtJellyfinInternalUrl') || v.querySelector('#txtJellyfinBaseUrl');
+
+            if (chkSweeper) {
+                config.EnableAutoProbe = chkSweeper.checked;
+            }
+            if (chkAutoHeal) {
+                config.EnableAutoDelete = chkAutoHeal.checked;
+            }
+            if (chkNextEp) {
+                config.EnableNextEpisodePreWarm = chkNextEp.checked;
+            }
+            if (chkChapters) {
+                config.SynthesizeVirtualChapters = chkChapters.checked;
+            }
+            if (txtMarker) {
+                config.MountMarkerFileName = txtMarker.value.trim();
+            }
+            if (txtJellyfinUrl) {
+                config.JellyfinBaseUrl = txtJellyfinUrl.value.trim();
+            }
+
+            if (v._qsState) {
+                v._qsState.currentConfig = config;
+            }
+
+            return ApiClient.updatePluginConfiguration(pluginId, config).then(function (res) {
+                if (!silent && window.Dashboard && typeof Dashboard.processPluginConfigurationUpdateResult === 'function') {
+                    Dashboard.processPluginConfigurationUpdateResult();
+                }
+                return res;
+            });
+        });
+    }
+
     function loadConfig(defaultUnsyncedText) {
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-            if (chkAutoProbe) { chkAutoProbe.checked = !!config.EnableAutoProbe; }
-            if (chkAutoDelete) { chkAutoDelete.checked = !!config.EnableAutoDelete; }
+            if (view._qsState) {
+                view._qsState.currentConfig = config;
+            }
+
+            var chkSweeper = view.querySelector('#chkEnableSweeper') || view.querySelector('#chkEnableAutoProbe');
+            var chkAutoHeal = view.querySelector('#chkEnableAutoHeal') || view.querySelector('#chkEnableAutoDelete');
+            var chkNextEp = view.querySelector('#chkEnableNextEpisodePreWarm');
+            var chkChapters = view.querySelector('#chkSynthesizeVirtualChapters');
+            var txtMarker = view.querySelector('#txtMountMarkerFileName');
+            var txtJellyfinUrl = view.querySelector('#txtJellyfinInternalUrl') || view.querySelector('#txtJellyfinBaseUrl');
+
+            if (chkSweeper) { chkSweeper.checked = !!config.EnableAutoProbe; }
+            if (chkAutoHeal) { chkAutoHeal.checked = !!config.EnableAutoDelete; }
             if (chkNextEp) { chkNextEp.checked = config.EnableNextEpisodePreWarm !== false; }
             if (chkChapters) { chkChapters.checked = config.SynthesizeVirtualChapters !== false; }
             if (txtMarker) { txtMarker.value = config.MountMarkerFileName || ''; }
@@ -934,51 +1052,79 @@
     // ── Polling Management ──
 
     function startPolling() {
-        if (pollTimer) {
-            clearInterval(pollTimer);
+        if (view._qsState.queuePollInterval) {
+            clearInterval(view._qsState.queuePollInterval);
+            view._qsState.queuePollInterval = null;
         }
-        pollTimer = setInterval(loadStatus, 1500);
+        view._qsState.isPolling = true;
+        view._qsState.idlePollCount = 0;
+        var progressContainer = view.querySelector('#probeProgressContainer') || view.querySelector('#probeProgressSection');
+        if (progressContainer) {
+            progressContainer.style.display = 'block';
+        }
+        pollQueueStatus(view);
+        view._qsState.queuePollInterval = setInterval(function () {
+            pollQueueStatus(view);
+        }, 1500);
     }
 
     function stopPolling() {
-        if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
+        if (view._qsState.queuePollInterval) {
+            clearInterval(view._qsState.queuePollInterval);
+            view._qsState.queuePollInterval = null;
         }
+        view._qsState.isPolling = false;
     }
 
     function startQueuePolling() {
-        if (queuePollTimer) {
-            clearInterval(queuePollTimer);
-        }
-        queuePollTimer = setInterval(loadQueue, 3000);
+        startPolling();
     }
 
     function stopQueuePolling() {
-        if (queuePollTimer) {
-            clearInterval(queuePollTimer);
-            queuePollTimer = null;
-        }
+        stopPolling();
     }
 
     // ── Event Handlers ──
 
-    // 1. Settings Form Submit
+    // 1. Settings Form Submit & Auto-Save
     if (form) {
         form.addEventListener('submit', function (e) {
             e.preventDefault();
-            ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                config.EnableAutoProbe = chkAutoProbe ? chkAutoProbe.checked : false;
-                config.EnableAutoDelete = chkAutoDelete ? chkAutoDelete.checked : false;
-                config.EnableNextEpisodePreWarm = chkNextEp ? chkNextEp.checked : true;
-                config.SynthesizeVirtualChapters = chkChapters ? chkChapters.checked : true;
-                config.MountMarkerFileName = txtMarker ? txtMarker.value.trim() : '';
-                config.JellyfinBaseUrl = txtJellyfinUrl ? txtJellyfinUrl.value.trim() : '';
+            saveFullConfig(view, false);
+        });
+    }
 
-                ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
-                    Dashboard.processPluginConfigurationUpdateResult();
-                });
-            });
+    var btnSaveMaintenance = view.querySelector('#btnSaveMaintenanceSettings');
+    if (btnSaveMaintenance) {
+        btnSaveMaintenance.addEventListener('click', function (e) {
+            e.preventDefault();
+            saveFullConfig(view, false);
+        });
+    }
+
+    // Auto-Save Maintenance Settings on Change
+    var chkAutoHealEl = view.querySelector('#chkEnableAutoHeal') || view.querySelector('#chkEnableAutoDelete');
+    if (chkAutoHealEl) {
+        chkAutoHealEl.addEventListener('change', function () {
+            saveFullConfig(view, true);
+        });
+    }
+    var chkSweeperEl = view.querySelector('#chkEnableSweeper') || view.querySelector('#chkEnableAutoProbe');
+    if (chkSweeperEl) {
+        chkSweeperEl.addEventListener('change', function () {
+            saveFullConfig(view, true);
+        });
+    }
+    var chkNextEpEl = view.querySelector('#chkEnableNextEpisodePreWarm');
+    if (chkNextEpEl) {
+        chkNextEpEl.addEventListener('change', function () {
+            saveFullConfig(view, true);
+        });
+    }
+    var chkChaptersEl = view.querySelector('#chkSynthesizeVirtualChapters');
+    if (chkChaptersEl) {
+        chkChaptersEl.addEventListener('change', function () {
+            saveFullConfig(view, true);
         });
     }
 
@@ -1370,15 +1516,10 @@
                     }
 
                     var enqueued = (result && (typeof result.Enqueued === 'number' ? result.Enqueued : result.enqueued)) || 0;
-                    probeTotalCount = enqueued;
+                    view._qsState.probeTotalCount = enqueued;
 
                     // Update button text to "Probing in Progress..." while running
                     btnStart.innerHTML = '<span class="quickstrm-btn-spinner"></span> Probing in Progress...';
-
-                    if (queuePollInterval) {
-                        clearInterval(queuePollInterval);
-                        queuePollInterval = null;
-                    }
 
                     // Show non-blocking toast
                     var msg = (result && (result.Message || result.message)) || ('Queued ' + enqueued + ' items for probing.');
@@ -1386,8 +1527,7 @@
                         Dashboard.alert({ message: msg });
                     }
 
-                    pollQueueStatus();
-                    queuePollInterval = setInterval(pollQueueStatus, 2000);
+                    startPolling();
                 })
                 .catch(function (err) {
                     if (typeof Dashboard !== 'undefined' && typeof Dashboard.hideLoadingMsg === 'function') {
@@ -1423,12 +1563,9 @@
             apiPost('QuickStrm/Probe/Stop').then(function () {
                 btnStop.disabled = false;
                 btnStop.innerHTML = '<span>Stop</span>';
-                if (queuePollInterval) {
-                    clearInterval(queuePollInterval);
-                    queuePollInterval = null;
-                }
+                stopPolling();
                 restoreProbeButton();
-                pollQueueStatus();
+                pollQueueStatus(view);
                 loadStatus();
             }).catch(function () {
                 btnStop.disabled = false;
@@ -1541,12 +1678,7 @@
     });
 
     view.addEventListener('viewhide', function () {
-        if (queuePollInterval) {
-            clearInterval(queuePollInterval);
-            queuePollInterval = null;
-        }
         stopPolling();
-        stopQueuePolling();
         stopCountdown();
     });
 
