@@ -92,7 +92,7 @@ public class ProactiveSweeperTask : IScheduledTask
             }
 
             var strmItems = batch
-                .Where(item => item.Path != null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+                .Where(item => ProbeService.IsStrmFile(item.Path))
                 .ToList();
 
             foreach (var item in strmItems)

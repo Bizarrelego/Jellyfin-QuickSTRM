@@ -56,8 +56,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         bool enablePathSubstitution,
         CancellationToken cancellationToken)
     {
-        var isStrm = item.Path != null
-            && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase);
+        var isStrm = ProbeService.IsStrmFile(item.Path);
 
         if (!isStrm)
         {
@@ -444,7 +443,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     public IReadOnlyList<MediaSourceInfo> GetStaticMediaSources(BaseItem item, bool enablePathSubstitution, User user = null)
     {
         var sources = _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
-        if (item?.Path != null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+        if (ProbeService.IsStrmFile(item?.Path))
         {
             EnsureStreamCapabilities(sources, item?.Id);
         }
@@ -454,7 +453,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     public async Task<MediaSourceInfo> GetMediaSource(BaseItem item, string mediaSourceId, string liveStreamId, bool enablePathSubstitution, CancellationToken cancellationToken)
     {
         var source = await _inner.GetMediaSource(item, mediaSourceId, liveStreamId, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
-        if (source is not null && item?.Path != null && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+        if (source is not null && ProbeService.IsStrmFile(item?.Path))
         {
             EnsureStreamCapabilities(source, item?.Id);
         }

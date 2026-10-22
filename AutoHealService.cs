@@ -95,6 +95,11 @@ public sealed class AutoHealService : IHostedService, IDisposable
     /// </summary>
     public IReadOnlyDictionary<string, AutoHealEntry> Entries => _entries;
 
+    /// <summary>
+    /// Returns all active recovery feed entries as a read-only list.
+    /// </summary>
+    public IReadOnlyCollection<AutoHealEntry> GetAllEntries() => _entries.Values.ToArray();
+
     // ── IHostedService Lifecycle ──
 
     public Task StartAsync(CancellationToken cancellationToken)

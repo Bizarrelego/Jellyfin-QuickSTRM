@@ -135,7 +135,7 @@ public class VfsPrewarmService : IDisposable
             }
         }
 
-        if (string.IsNullOrEmpty(item.Path) || !item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+        if (!ProbeService.IsStrmFile(item.Path))
         {
             return;
         }

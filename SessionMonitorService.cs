@@ -174,7 +174,7 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
         }
 
         // Only pre-warm .strm files that lack stream info
-        var isStrm = nextEpisode.Path is not null && nextEpisode.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase);
+        var isStrm = ProbeService.IsStrmFile(nextEpisode.Path);
         var hasStreamInfo = nextEpisode.RunTimeTicks.HasValue && nextEpisode.RunTimeTicks.Value > 0;
 
         if (isStrm && !hasStreamInfo)
@@ -231,7 +231,7 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
     private void DeferredSynthesizeVirtualChapters(BaseItem item)
     {
         // 1. Verify item is a .strm file
-        if (string.IsNullOrEmpty(item.Path) || !item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
+        if (!ProbeService.IsStrmFile(item.Path))
         {
             return;
         }

@@ -45,6 +45,100 @@ public class QuickStrmController : ControllerBase
     }
 
     /// <summary>
+    /// Returns unified dashboard telemetry, queue metrics, and active auto-heal entries.
+    /// </summary>
+    [HttpGet("Dashboard")]
+    [Authorize(Policy = "RequiresElevation")]
+    public ActionResult GetDashboard()
+    {
+        var (totalStrm, probedStrm, unprobedStrm) = _probeService.GetSummary();
+        var isScanning = _probeService.IsScanningLibrary;
+        var isBatchRunning = _probeService.IsBatchRunning;
+        var isRunning = isScanning || isBatchRunning || _probeService.State == "Running";
+
+        var config = Plugin.Instance?.Configuration;
+        string[] ledger;
+        if (config is not null)
+        {
+            lock (config)
+            {
+                ledger = config.ActionLedger.ToArray();
+            }
+        }
+        else
+        {
+            ledger = Array.Empty<string>();
+        }
+
+        return Ok(new
+        {
+            Queue = new
+            {
+                IsRunning = isRunning,
+                ScanningLibrary = isScanning,
+                QueueCount = _probeService.HighPriorityQueueWaiting + _probeService.LowPriorityQueueWaiting,
+                ActiveCount = _probeService.ActiveCount,
+                TotalQueued = _probeService.TotalItems,
+                CompletedCount = _probeService.ProcessedItems,
+                CircuitState = _probeService.CircuitState,
+                IsCircuitTripped = _probeService.IsCircuitTripped,
+                ConsecutiveFailures = _probeService.ConsecutiveFailures
+            },
+            Telemetry = new
+            {
+                ProbedCount = _telemetryService.ProbedCount,
+                PrewarmedCount = _telemetryService.PrewarmedCount,
+                HealedCount = _telemetryService.HealedCount,
+                DeletedCount = _telemetryService.DeletedCount,
+                TotalStrmCount = totalStrm,
+                UnprobedStrmCount = unprobedStrm,
+                Ledger = ledger
+            },
+            AutoHeal = new
+            {
+                RadarrCount = _autoHealService.RadarrCount,
+                SonarrCount = _autoHealService.SonarrCount,
+                TotalCount = _autoHealService.TotalCount,
+                Items = _autoHealService.GetAllEntries()
+            }
+        });
+    }
+
+    /// <summary>
+    /// Returns telemetry metrics and recent ledger events.
+    /// </summary>
+    [HttpGet("Telemetry")]
+    [Authorize(Policy = "RequiresElevation")]
+    public ActionResult GetTelemetry()
+    {
+        var (totalStrm, probedStrm, unprobedStrm) = _probeService.GetSummary();
+        var config = Plugin.Instance?.Configuration;
+        string[] ledger;
+        if (config is not null)
+        {
+            lock (config)
+            {
+                ledger = config.ActionLedger.ToArray();
+            }
+        }
+        else
+        {
+            ledger = Array.Empty<string>();
+        }
+
+        return Ok(new
+        {
+            ProbedCount = _telemetryService.ProbedCount,
+            PrewarmedCount = _telemetryService.PrewarmedCount,
+            HealedCount = _telemetryService.HealedCount,
+            DeletedCount = _telemetryService.DeletedCount,
+            TotalStrmCount = totalStrm,
+            UnprobedStrmCount = unprobedStrm,
+            Ledger = ledger
+        });
+    }
+
+    /// <summary>
     /// Returns a summary of .strm items in the library and auto-heal feed metrics.
     /// </summary>
     [HttpGet("Summary")]
@@ -201,6 +295,7 @@ public class QuickStrmController : ControllerBase
     /// Cancels any active manual probe run.
     /// </summary>
     [HttpPost("Probe/Stop")]
+    [HttpPost("Probe/Cancel")]
     [Authorize(Policy = "RequiresElevation")]
     public ActionResult StopProbe()
     {
@@ -247,6 +342,7 @@ public class QuickStrmController : ControllerBase
     /// Manually resets the circuit breaker to closed state.
     /// </summary>
     [HttpPost("CircuitBreaker/Reset")]
+    [HttpPost("Circuit/Reset")]
     [Authorize(Policy = "RequiresElevation")]
     public ActionResult ResetCircuitBreaker()
     {

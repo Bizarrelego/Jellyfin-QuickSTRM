@@ -62,6 +62,8 @@
         // ── 1. Telemetry Metric DOM references ──
         var metricCircuitState = view.querySelector('#metricCircuitState');
         var metricCircuitSub = view.querySelector('#metricCircuitSub');
+        var statCircuitState = view.querySelector('#statCircuitState') || metricCircuitState;
+        var btnResetBreaker = view.querySelector('#btnResetBreaker');
         var metricCooldownTimer = view.querySelector('#metricCooldownTimer');
         var metricCooldownSub = view.querySelector('#metricCooldownSub');
         var metricQueueDepth = view.querySelector('#metricQueueDepth');
@@ -84,6 +86,11 @@
         var tabButtons = view.querySelectorAll('.quickstrm-tab-btn');
         var tabContents = view.querySelectorAll('.quickstrm-tab-content');
 
+        var badgeSavedSweeper = view.querySelector('#badgeSavedSweeper');
+        var badgeSavedAutoHeal = view.querySelector('#badgeSavedAutoHeal');
+        var badgeSavedNextEp = view.querySelector('#badgeSavedNextEp');
+        var badgeSavedChapters = view.querySelector('#badgeSavedChapters');
+
         // ── 3. Native Auto-Heal Feed DOM references ──
         var txtRadarrFeedUrl = view.querySelector('#txtRadarrFeedUrl');
         var txtSonarrFeedUrl = view.querySelector('#txtSonarrFeedUrl');
@@ -92,6 +99,11 @@
         var btnRefreshAutoHealFeeds = view.querySelector('#btnRefreshAutoHealFeeds');
         var lblAutoHealRadarrCount = view.querySelector('#lblAutoHealRadarrCount');
         var lblAutoHealSonarrCount = view.querySelector('#lblAutoHealSonarrCount');
+        var lblRecoveryQueueCount = view.querySelector('#lblRecoveryQueueCount');
+        var tblAutoHealItems = view.querySelector('#tblAutoHealItems');
+        var tblAutoHealBody = view.querySelector('#tblAutoHealBody');
+        var emptyAutoHealMessage = view.querySelector('#emptyAutoHealMessage');
+        var tableAutoHealContainer = view.querySelector('#tableAutoHealContainer');
 
         // ── 4. STRM Tools DOM references ──
         var txtRewriteOldPrefix = view.querySelector('#txtRewriteOldPrefix');
@@ -100,15 +112,20 @@
         var btnRunRewrite = view.querySelector('#btnRewriteUrls') || view.querySelector('#btnRunRewrite');
         var rewriteResults = view.querySelector('#rewriteResults');
 
-        // Pre-probe & Failure cache DOM references
-        var lblTotal = view.querySelector('#lblSummaryTotal');
-        var lblProbed = view.querySelector('#lblSummaryProbed');
-        var lblUnprobed = view.querySelector('#lblSummaryUnprobed');
+        // Pre-probe, Library Health & Failure cache DOM references
+        var statTotalStrm = view.querySelector('#statTotalStrm');
+        var statUnprobedStrm = view.querySelector('#statUnprobedStrm');
+        var statProbedCount = view.querySelector('#statProbedCount');
+        var statPrewarmedCount = view.querySelector('#statPrewarmedCount');
+        var lblTotal = view.querySelector('#lblSummaryTotal') || statTotalStrm;
+        var lblProbed = view.querySelector('#lblSummaryProbed') || statProbedCount;
+        var lblUnprobed = view.querySelector('#lblSummaryUnprobed') || statUnprobedStrm;
         var lblQueue = view.querySelector('#lblSummaryQueue');
         var lblQueueDetail = view.querySelector('#lblSummaryQueueDetail');
         var selectMode = view.querySelector('#selectProbeMode') || view.querySelector('#selProbeMode');
         var btnStart = view.querySelector('#btnStartProbe');
-        var btnStop = view.querySelector('#btnStopProbe');
+        var btnCancelScan = view.querySelector('#btnCancelScan');
+        var btnStop = view.querySelector('#btnStopProbe') || btnCancelScan;
         var btnResetFailureCache = view.querySelector('#btnResetFailureCache');
         var lblStatus = view.querySelector('#probeStatusText') || view.querySelector('#lblTaskStatus');
         var progressBar = view.querySelector('#probeProgressBar') || view.querySelector('.taskProgressInner');
@@ -369,46 +386,38 @@
         }
     }
 
-    // ── Data Loading ──
+    // ── Data Loading & Unified Dashboard ──
 
-    function loadSummary() {
-        apiGet('QuickStrm/Summary').then(function (data) {
-            if (lblTotal) { lblTotal.textContent = data.Total; }
-            if (lblProbed) { lblProbed.textContent = data.Probed; }
-            if (lblUnprobed) { lblUnprobed.textContent = data.Unprobed; }
-        });
+    function renderLedgerEntries(entries) {
+        if (!recentActionsList) { return; }
+        if (!Array.isArray(entries) || entries.length === 0) {
+            recentActionsList.innerHTML = '<div style="color: var(--text-muted-color, #777); font-style: italic;">No recent actions logged.</div>';
+            return;
+        }
+        var html = '';
+        var reversed = entries.slice().reverse();
+        for (var i = 0; i < reversed.length; i++) {
+            var entry = reversed[i];
+            var color = 'var(--text-color, #ddd)';
+            if (entry.indexOf('STRM Auto-Heal') !== -1 || entry.indexOf('Auto-Heal') !== -1) {
+                color = '#ffb74d';
+            } else if (entry.indexOf('Tripped') !== -1) {
+                color = '#e57373';
+            } else if (entry.indexOf('Reset') !== -1) {
+                color = '#81c784';
+            }
+            html += '<div style="padding: 0.35em 0; border-bottom: 1px solid rgba(255,255,255,0.06); color: ' + color + '; word-break: break-all;">' + escapeHtml(entry) + '</div>';
+        }
+        recentActionsList.innerHTML = html;
     }
 
     function loadLedger() {
         if (!recentActionsList) { return; }
-        var ledgerUrl = (typeof ApiClient.getUrl === 'function') ? ApiClient.getUrl('QuickStrm/Ledger') : 'QuickStrm/Ledger';
-        var fetchPromise = (typeof ApiClient.getJSON === 'function')
-            ? ApiClient.getJSON(ledgerUrl)
-            : apiGet('QuickStrm/Ledger');
-
-        fetchPromise.then(function (entries) {
+        apiGet('QuickStrm/Ledger').then(function (entries) {
             if (!Array.isArray(entries) && entries && Array.isArray(entries.Entries)) {
                 entries = entries.Entries;
             }
-            if (!Array.isArray(entries) || entries.length === 0) {
-                recentActionsList.innerHTML = '<div style="color: var(--text-muted-color, #777); font-style: italic;">No recent actions logged.</div>';
-                return;
-            }
-            var html = '';
-            var reversed = entries.slice().reverse();
-            for (var i = 0; i < reversed.length; i++) {
-                var entry = reversed[i];
-                var color = 'var(--text-color, #ddd)';
-                if (entry.indexOf('STRM Auto-Heal') !== -1 || entry.indexOf('Auto-Heal') !== -1) {
-                    color = '#ffb74d';
-                } else if (entry.indexOf('Tripped') !== -1) {
-                    color = '#e57373';
-                } else if (entry.indexOf('Reset') !== -1) {
-                    color = '#81c784';
-                }
-                html += '<div style="padding: 0.35em 0; border-bottom: 1px solid rgba(255,255,255,0.06); color: ' + color + '; word-break: break-all;">' + escapeHtml(entry) + '</div>';
-            }
-            recentActionsList.innerHTML = html;
+            renderLedgerEntries(entries);
         }).catch(function (err) {
             recentActionsList.innerHTML = '<div style="color: #e53935;">Failed to load recent actions: ' + escapeHtml(extractErrorMessage(err)) + '</div>';
         });
@@ -427,193 +436,228 @@
         }
     }
 
-    function pollQueueStatus(viewEl) {
+    function renderAutoHealTable(items) {
+        if (!tblAutoHealBody || !emptyAutoHealMessage || !tableAutoHealContainer) {
+            return;
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+            tableAutoHealContainer.style.display = 'none';
+            emptyAutoHealMessage.style.display = 'block';
+            tblAutoHealBody.innerHTML = '';
+            return;
+        }
+
+        emptyAutoHealMessage.style.display = 'none';
+        tableAutoHealContainer.style.display = 'block';
+
+        var html = '';
+        for (var i = 0; i < items.length; i++) {
+            var it = items[i];
+            var title = escapeHtml(it.Title || it.title || 'Unknown Media');
+            var id = escapeHtml(it.Id || it.id || '-');
+            var rawType = (it.MediaType != null) ? it.MediaType : it.mediaType;
+            var isMovie = rawType === 0 || rawType === 'Movie' || rawType === 'movie';
+            var typeBadge = isMovie
+                ? '<span class="quickstrm-badge quickstrm-badge-radarr">Movie</span>'
+                : '<span class="quickstrm-badge quickstrm-badge-sonarr">Series</span>';
+            var dateStr = '-';
+            var rawDate = it.DateAdded || it.dateAdded;
+            if (rawDate) {
+                try {
+                    dateStr = new Date(rawDate).toLocaleString();
+                } catch (e) {
+                    dateStr = String(rawDate);
+                }
+            }
+
+            html += '<tr style="border-bottom: 1px solid var(--line-color, rgba(255,255,255,0.06));">';
+            html += '<td style="padding: 0.6em 0.8em; font-weight: 500; color: var(--text-color, #fff);">' + title + '</td>';
+            html += '<td style="padding: 0.6em 0.8em;">' + typeBadge + '</td>';
+            html += '<td style="padding: 0.6em 0.8em; font-family: monospace; color: var(--text-muted-color, #bbb);">' + id + '</td>';
+            html += '<td style="padding: 0.6em 0.8em; font-size: 0.85em; color: var(--text-muted-color, #888);">' + escapeHtml(dateStr) + '</td>';
+            html += '</tr>';
+        }
+
+        tblAutoHealBody.innerHTML = html;
+    }
+
+    function scheduleNextPoll(viewEl, delayMs) {
         var v = viewEl || view;
-        var queueUrl = (typeof ApiClient.getUrl === 'function') ? ApiClient.getUrl('QuickStrm/Queue') : 'QuickStrm/Queue';
+        if (!v || !v._qsState || v._qsState.isPolling === false) {
+            return;
+        }
+        if (v._qsState.queuePollInterval) {
+            clearTimeout(v._qsState.queuePollInterval);
+            v._qsState.queuePollInterval = null;
+        }
+        v._qsState.queuePollInterval = setTimeout(function () {
+            fetchDashboard(v);
+        }, delayMs || 5000);
+    }
+
+    function fetchDashboard(viewEl) {
+        var v = viewEl || view;
+        var dashUrl = (typeof ApiClient.getUrl === 'function') ? ApiClient.getUrl('QuickStrm/Dashboard') : 'QuickStrm/Dashboard';
         var fetchPromise = (typeof ApiClient.getJSON === 'function')
-            ? ApiClient.getJSON(queueUrl)
-            : apiGet('QuickStrm/Queue');
+            ? ApiClient.getJSON(dashUrl)
+            : apiGet('QuickStrm/Dashboard');
 
         return fetchPromise.then(function (data) {
-            if (!data) {
-                return;
+            if (!data) { return null; }
+
+            var q = data.Queue || data.queue || {};
+            var t = data.Telemetry || data.telemetry || {};
+            var ah = data.AutoHeal || data.autoHeal || {};
+
+            var isRunning = q.IsRunning || q.isRunning || false;
+            var isScanning = q.ScanningLibrary || q.scanningLibrary || false;
+            var queueCount = typeof q.QueueCount === 'number' ? q.QueueCount : (typeof q.queueCount === 'number' ? q.queueCount : 0);
+            var activeCount = typeof q.ActiveCount === 'number' ? q.ActiveCount : (typeof q.activeCount === 'number' ? q.activeCount : 0);
+            var isTripped = q.IsCircuitTripped === true || q.isCircuitTripped === true;
+            var consecutiveFailures = typeof q.ConsecutiveFailures === 'number' ? q.ConsecutiveFailures : (typeof q.consecutiveFailures === 'number' ? q.consecutiveFailures : 0);
+            var curCircuitState = q.CircuitState || q.circuitState || (isTripped ? 'Open' : 'Closed');
+
+            circuitState = curCircuitState;
+
+            // 1. Hook Circuit Breaker & Health Stats
+            if (statCircuitState) {
+                statCircuitState.textContent = curCircuitState;
+                statCircuitState.style.color = curCircuitState === 'Closed' ? '#4caf50' : (curCircuitState === 'Open' ? '#e53935' : '#ff9800');
+            }
+            if (metricCircuitState && metricCircuitState !== statCircuitState) {
+                metricCircuitState.textContent = curCircuitState;
+                metricCircuitState.style.color = curCircuitState === 'Closed' ? '#4caf50' : (curCircuitState === 'Open' ? '#e53935' : '#ff9800');
+            }
+            if (metricCircuitSub) {
+                metricCircuitSub.textContent = curCircuitState === 'Closed' ? 'Normal Operation' : (curCircuitState === 'Open' ? 'Mount Offline / Cooldown' : 'Trial In Flight');
             }
 
-            var low = typeof data.LowPriorityWaiting === 'number' ? data.LowPriorityWaiting : 0;
-            var high = typeof data.HighPriorityWaiting === 'number' ? data.HighPriorityWaiting : 0;
-            var running = typeof data.Running === 'number' ? data.Running : 0;
-            var waiting = typeof data.Waiting === 'number' ? data.Waiting : (low + high);
-
-            var queueCount = typeof data.QueueCount === 'number' ? data.QueueCount : waiting;
-            var activeCount = typeof data.ActiveCount === 'number' ? data.ActiveCount : running;
-            var isScanning = data.ScanningLibrary === true;
-            var isRunningFlag = typeof data.IsRunning === 'boolean' ? data.IsRunning : (running > 0 || waiting > 0 || isScanning);
-
-            // Map metrics to DOM
-            if (lblQueue) { lblQueue.textContent = waiting + running; }
-            if (lblQueueDetail) { lblQueueDetail.textContent = waiting + ' waiting / ' + running + ' running'; }
-
-            if (metricQueueDepth) {
-                metricQueueDepth.textContent = high + ' / ' + low;
-            }
-            if (metricQueueSub) {
-                metricQueueSub.textContent = high + ' High / ' + low + ' Low Lane';
+            if (circuitBanner) {
+                circuitBanner.style.display = isTripped ? 'block' : 'none';
             }
 
-            if (metricActiveProbes) {
-                metricActiveProbes.textContent = running + ' / 2';
-            }
-            if (metricActiveProbesSub) {
-                var cacheCount = typeof data.CacheSize !== 'undefined' ? data.CacheSize : 0;
-                metricActiveProbesSub.textContent = cacheCount === 1 ? '1 failed item in cache' : cacheCount + ' failed items in cache';
+            // Compact Reset Breaker button visibility
+            if (btnResetBreaker) {
+                btnResetBreaker.style.display = (isTripped || consecutiveFailures > 0) ? 'inline-flex' : 'none';
             }
 
-            var isCircuitOpen = data.CircuitBreakerOpen === true || data.CircuitTripped === true;
-            circuitState = data.CircuitState || (isCircuitOpen ? 'Open' : 'Closed');
-            cooldownEndsAt = Date.now() + (data.CooldownSecondsRemaining || 0) * 1000;
-            renderCircuit();
+            // Library Health Metrics
+            var totalStrm = typeof t.TotalStrmCount === 'number' ? t.TotalStrmCount : (typeof t.totalStrmCount === 'number' ? t.totalStrmCount : 0);
+            var unprobedStrm = typeof t.UnprobedStrmCount === 'number' ? t.UnprobedStrmCount : (typeof t.unprobedStrmCount === 'number' ? t.unprobedStrmCount : 0);
+            var probedCount = typeof t.ProbedCount === 'number' ? t.ProbedCount : (typeof t.probedCount === 'number' ? t.probedCount : 0);
+            var prewarmedCount = typeof t.PrewarmedCount === 'number' ? t.PrewarmedCount : (typeof t.prewarmedCount === 'number' ? t.prewarmedCount : 0);
 
-            // Evaluate idle condition: 2 consecutive idle polls required before hiding progress container
-            var isIdle = !isRunningFlag && !isScanning && queueCount === 0 && activeCount === 0;
-            if (isIdle) {
-                v._qsState.idlePollCount = (v._qsState.idlePollCount || 0) + 1;
-            } else {
-                v._qsState.idlePollCount = 0;
+            if (statTotalStrm) { statTotalStrm.textContent = totalStrm; }
+            if (lblTotal && lblTotal !== statTotalStrm) { lblTotal.textContent = totalStrm; }
+
+            if (statUnprobedStrm) { statUnprobedStrm.textContent = unprobedStrm; }
+            if (lblUnprobed && lblUnprobed !== statUnprobedStrm) { lblUnprobed.textContent = unprobedStrm; }
+
+            if (statProbedCount) { statProbedCount.textContent = probedCount; }
+            if (lblProbed && lblProbed !== statProbedCount) { lblProbed.textContent = probedCount; }
+
+            if (statPrewarmedCount) { statPrewarmedCount.textContent = prewarmedCount; }
+
+            // Persistence Queue Summary
+            if (lblQueue) { lblQueue.textContent = queueCount + activeCount; }
+            if (lblQueueDetail) { lblQueueDetail.textContent = queueCount + ' waiting / ' + activeCount + ' running'; }
+            if (metricQueueDepth) { metricQueueDepth.textContent = queueCount; }
+            if (metricActiveProbes) { metricActiveProbes.textContent = activeCount + ' / 2'; }
+
+            // Ledger entries if present
+            var ledgerEntries = t.Ledger || t.ledger;
+            if (Array.isArray(ledgerEntries) && recentActionsList) {
+                renderLedgerEntries(ledgerEntries);
             }
 
-            var progressContainer = v.querySelector('#probeProgressContainer') || v.querySelector('#probeProgressSection');
-            if (progressContainer) {
-                if (v._qsState.idlePollCount >= 2) {
-                    progressContainer.style.display = 'none';
+            // Pre-Probe Progress and Action Buttons
+            var isProbeActive = isRunning || isScanning;
+            if (isProbeActive) {
+                if (btnStart) { btnStart.style.display = 'none'; }
+                if (btnCancelScan) { btnCancelScan.style.display = 'inline-flex'; }
+                if (btnStop && btnStop !== btnCancelScan) { btnStop.style.display = 'inline-flex'; }
+
+                var progContainer = v.querySelector('#probeProgressContainer') || v.querySelector('.probeProgressSection');
+                if (progContainer) { progContainer.style.display = 'block'; }
+
+                if (isScanning && activeCount === 0 && queueCount === 0) {
+                    if (lblStatus) {
+                        lblStatus.textContent = 'Status: Scanning Library...';
+                        lblStatus.style.color = '#4fc3f7';
+                    }
+                    if (progressBar) { progressBar.classList.add('indeterminate'); }
                 } else {
-                    progressContainer.style.display = 'block';
+                    if (progressBar) { progressBar.classList.remove('indeterminate'); }
+                    if (v._qsState.probeTotalCount > 0) {
+                        var remaining = queueCount + activeCount;
+                        var processed = Math.max(0, v._qsState.probeTotalCount - remaining);
+                        var pct = Math.min(100, Math.round((processed / v._qsState.probeTotalCount) * 100));
+                        if (progressBar) { progressBar.style.width = pct + '%'; }
+                        if (lblStatus) { lblStatus.textContent = 'Status: Running (' + pct + '%)'; lblStatus.style.color = ''; }
+                    } else {
+                        if (progressBar) { progressBar.classList.add('indeterminate'); }
+                        if (lblStatus) { lblStatus.textContent = 'Status: Running'; lblStatus.style.color = ''; }
+                    }
                 }
-            }
+                if (lblCurrentItem) {
+                    lblCurrentItem.textContent = activeCount > 0 ? (activeCount + ' active probe(s)') : '-';
+                }
+            } else {
+                restoreProbeButton();
+                if (btnStart) { btnStart.style.display = 'inline-flex'; }
+                if (btnCancelScan) { btnCancelScan.style.display = 'none'; }
+                if (btnStop && btnStop !== btnCancelScan) { btnStop.style.display = 'none'; }
 
-            // If background scan is actively enumerating library items
-            if (isScanning && low === 0 && running === 0) {
-                if (lblStatus) {
-                    lblStatus.textContent = 'Status: Scanning Library...';
-                    lblStatus.style.color = '#4fc3f7';
-                }
                 if (progressBar) {
-                    progressBar.classList.add('indeterminate');
+                    progressBar.classList.remove('indeterminate');
+                    progressBar.style.width = '0%';
                 }
-                if (btnStart) {
-                    btnStart.style.display = 'none';
-                }
-                if (btnStop) {
-                    btnStop.style.display = 'inline-flex';
-                }
-                return;
-            }
-
-            if (v._qsState.idlePollCount >= 2) {
                 if (lblStatus) {
                     lblStatus.textContent = 'Status: Idle';
                     lblStatus.style.color = '';
                 }
                 if (lblCurrentItem) {
                     lblCurrentItem.textContent = '-';
-                } else if (probeItemText) {
-                    probeItemText.textContent = 'Probing: -';
-                }
-
-                if (progressBar) {
-                    progressBar.classList.remove('indeterminate');
-                    progressBar.style.width = '0%';
-                }
-
-                v._qsState.probeTotalCount = 0;
-                restoreProbeButton();
-
-                if (btnStart) {
-                    btnStart.style.display = 'inline-flex';
-                }
-                if (btnStop) {
-                    btnStop.style.display = 'none';
-                }
-
-                if (v._qsState.queuePollInterval) {
-                    clearInterval(v._qsState.queuePollInterval);
-                    v._qsState.queuePollInterval = null;
-                }
-                v._qsState.isPolling = false;
-
-                loadSummary();
-                return;
-            }
-
-            // Probe is running or queued
-            if (btnStart) {
-                btnStart.style.display = 'none';
-            }
-            if (btnStop) {
-                btnStop.style.display = 'inline-flex';
-            }
-
-            // If a total count was captured at the start of the probe, calculate the completion percentage.
-            if (v._qsState.probeTotalCount > 0) {
-                if (progressBar) {
-                    progressBar.classList.remove('indeterminate');
-                    var remaining = low + running;
-                    var processed = Math.max(0, v._qsState.probeTotalCount - remaining);
-                    var pct = Math.min(100, Math.round((processed / v._qsState.probeTotalCount) * 100));
-                    progressBar.style.width = pct + '%';
-                    if (lblStatus) {
-                        lblStatus.textContent = 'Status: Running (' + pct + '%)';
-                    }
-                }
-            } else if (running > 0) {
-                if (progressBar) {
-                    progressBar.classList.add('indeterminate');
-                }
-                if (lblStatus) {
-                    lblStatus.textContent = 'Status: Running';
-                }
-            } else {
-                if (progressBar) {
-                    progressBar.classList.remove('indeterminate');
-                    progressBar.style.width = '0%';
-                }
-                if (lblStatus) {
-                    lblStatus.textContent = 'Status: Waiting';
                 }
             }
 
-            if (lblCurrentItem) {
-                lblCurrentItem.textContent = data.CurrentItem || (running > 0 ? (running + ' active probe(s)') : '-');
-            }
+            // Auto-Heal Summary & Recovery Table
+            var radarrCount = typeof ah.RadarrCount === 'number' ? ah.RadarrCount : (typeof ah.radarrCount === 'number' ? ah.radarrCount : 0);
+            var sonarrCount = typeof ah.SonarrCount === 'number' ? ah.SonarrCount : (typeof ah.sonarrCount === 'number' ? ah.sonarrCount : 0);
+            var autoHealItems = ah.Items || ah.items || [];
+
+            if (lblAutoHealRadarrCount) { lblAutoHealRadarrCount.textContent = radarrCount; }
+            if (lblAutoHealSonarrCount) { lblAutoHealSonarrCount.textContent = sonarrCount; }
+            if (lblRecoveryQueueCount) { lblRecoveryQueueCount.textContent = autoHealItems.length + ' items'; }
+
+            renderAutoHealTable(autoHealItems);
+
+            // Schedule next poll adaptively: 1500ms when active, relaxing to 5000ms when idle
+            scheduleNextPoll(v, isProbeActive ? 1500 : 5000);
+
+            return data;
         }).catch(function (err) {
-            console.error('Error in pollQueueStatus:', err);
+            console.warn('QuickSTRM: Error fetching dashboard payload', err);
+            scheduleNextPoll(v, 5000);
         });
+    }
+
+    // Compatibility Wrappers for Legacy Callers
+    function pollQueueStatus(viewEl) {
+        return fetchDashboard(viewEl);
     }
 
     function loadQueue() {
-        return pollQueueStatus();
+        return fetchDashboard(view);
+    }
+
+    function loadSummary() {
+        return fetchDashboard(view);
     }
 
     function loadStatus() {
-        apiGet('QuickStrm/Probe/Status').then(function (data) {
-            var stateMap = { Idle: 'Idle', Running: 'Running', Stopping: 'Stopping' };
-            if (lblStatus) { lblStatus.textContent = 'Status: ' + (stateMap[data.State] || data.State); }
-            if (lblCurrentItem) { lblCurrentItem.textContent = data.CurrentItem || '-'; }
-
-            var pct = data.Total > 0 ? Math.round((data.Processed / data.Total) * 100) : 0;
-            if (progressBar) { progressBar.style.width = pct + '%'; }
-
-            if (data.State === 'Running' || data.State === 'Stopping') {
-                if (btnStart) { btnStart.style.display = 'none'; }
-                if (btnStop) { btnStop.style.display = 'inline-flex'; }
-                startPolling();
-            } else {
-                restoreProbeButton();
-                if (btnStart) { btnStart.style.display = 'inline-flex'; }
-                if (btnStop) { btnStop.style.display = 'none'; }
-                stopPolling();
-                loadSummary();
-            }
-        });
+        return fetchDashboard(view);
     }
 
     // ── Native Auto-Heal Feed Functions ──
@@ -634,18 +678,7 @@
         if (txtRadarrFeedUrl) { txtRadarrFeedUrl.value = radarrUrl; }
         if (txtSonarrFeedUrl) { txtSonarrFeedUrl.value = sonarrUrl; }
 
-        return apiGet('QuickStrm/AutoHeal/Summary')
-            .then(function (res) {
-                if (lblAutoHealRadarrCount) {
-                    lblAutoHealRadarrCount.textContent = (res && res.RadarrCount != null) ? res.RadarrCount : '0';
-                }
-                if (lblAutoHealSonarrCount) {
-                    lblAutoHealSonarrCount.textContent = (res && res.SonarrCount != null) ? res.SonarrCount : '0';
-                }
-            })
-            .catch(function () {
-                // Keep existing display if endpoint temporarily unavailable
-            });
+        return fetchDashboard(view);
     }
 
     function showCopyFeedback(btn) {
@@ -758,24 +791,16 @@
 
     function startPolling() {
         if (view._qsState.queuePollInterval) {
-            clearInterval(view._qsState.queuePollInterval);
+            clearTimeout(view._qsState.queuePollInterval);
             view._qsState.queuePollInterval = null;
         }
         view._qsState.isPolling = true;
-        view._qsState.idlePollCount = 0;
-        var progressContainer = view.querySelector('#probeProgressContainer') || view.querySelector('#probeProgressSection');
-        if (progressContainer) {
-            progressContainer.style.display = 'block';
-        }
-        pollQueueStatus(view);
-        view._qsState.queuePollInterval = setInterval(function () {
-            pollQueueStatus(view);
-        }, 1500);
+        fetchDashboard(view);
     }
 
     function stopPolling() {
         if (view._qsState.queuePollInterval) {
-            clearInterval(view._qsState.queuePollInterval);
+            clearTimeout(view._qsState.queuePollInterval);
             view._qsState.queuePollInterval = null;
         }
         view._qsState.isPolling = false;
@@ -807,29 +832,48 @@
         });
     }
 
-    // Auto-Save Maintenance Settings on Change
-    var chkAutoHealEl = view.querySelector('#chkEnableAutoHeal') || view.querySelector('#chkEnableAutoDelete');
-    if (chkAutoHealEl) {
-        chkAutoHealEl.addEventListener('change', function () {
-            saveFullConfig(view, true);
-        });
+    function flashSavedBadge(badgeEl) {
+        if (!badgeEl) { return; }
+        badgeEl.classList.add('visible');
+        setTimeout(function () {
+            badgeEl.classList.remove('visible');
+        }, 2000);
     }
+
+    // Auto-Save Maintenance Settings on Change with inline "Saved" badge
     var chkSweeperEl = view.querySelector('#chkEnableSweeper') || view.querySelector('#chkEnableAutoProbe');
     if (chkSweeperEl) {
         chkSweeperEl.addEventListener('change', function () {
-            saveFullConfig(view, true);
+            saveFullConfig(view, true).then(function () {
+                flashSavedBadge(badgeSavedSweeper);
+            });
         });
     }
+
+    var chkAutoHealEl = view.querySelector('#chkEnableAutoHeal') || view.querySelector('#chkEnableAutoDelete');
+    if (chkAutoHealEl) {
+        chkAutoHealEl.addEventListener('change', function () {
+            saveFullConfig(view, true).then(function () {
+                flashSavedBadge(badgeSavedAutoHeal);
+            });
+        });
+    }
+
     var chkNextEpEl = view.querySelector('#chkEnableNextEpisodePreWarm');
     if (chkNextEpEl) {
         chkNextEpEl.addEventListener('change', function () {
-            saveFullConfig(view, true);
+            saveFullConfig(view, true).then(function () {
+                flashSavedBadge(badgeSavedNextEp);
+            });
         });
     }
+
     var chkChaptersEl = view.querySelector('#chkSynthesizeVirtualChapters');
     if (chkChaptersEl) {
         chkChaptersEl.addEventListener('change', function () {
-            saveFullConfig(view, true);
+            saveFullConfig(view, true).then(function () {
+                flashSavedBadge(badgeSavedChapters);
+            });
         });
     }
 
@@ -1000,34 +1044,55 @@
         });
     }
 
-    if (btnStop) {
-        btnStop.addEventListener('click', function (e) {
-            if (e) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
+    function handleCancelScan(e) {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        if (btnCancelScan) {
+            btnCancelScan.disabled = true;
+            btnCancelScan.innerHTML = '<span class="quickstrm-btn-spinner"></span> Cancelling...';
+        }
+        if (btnStop && btnStop !== btnCancelScan) {
             btnStop.disabled = true;
             btnStop.innerHTML = '<span class="quickstrm-btn-spinner"></span> Stopping...';
-            apiPost('QuickStrm/Probe/Stop').then(function () {
+        }
+        apiPost('QuickStrm/Probe/Cancel').then(function () {
+            if (btnCancelScan) {
+                btnCancelScan.disabled = false;
+                btnCancelScan.innerHTML = '<span>Cancel Scan</span>';
+            }
+            if (btnStop && btnStop !== btnCancelScan) {
                 btnStop.disabled = false;
                 btnStop.innerHTML = '<span>Stop</span>';
-                stopPolling();
-                restoreProbeButton();
-                pollQueueStatus(view);
-                loadStatus();
-            }).catch(function () {
+            }
+            stopPolling();
+            restoreProbeButton();
+            fetchDashboard(view);
+        }).catch(function () {
+            if (btnCancelScan) {
+                btnCancelScan.disabled = false;
+                btnCancelScan.innerHTML = '<span>Cancel Scan</span>';
+            }
+            if (btnStop && btnStop !== btnCancelScan) {
                 btnStop.disabled = false;
                 btnStop.innerHTML = '<span>Stop</span>';
-                restoreProbeButton();
-            });
+            }
+            restoreProbeButton();
         });
+    }
+
+    if (btnCancelScan) {
+        btnCancelScan.addEventListener('click', handleCancelScan);
+    }
+    if (btnStop && btnStop !== btnCancelScan) {
+        btnStop.addEventListener('click', handleCancelScan);
     }
 
     if (btnResetFailureCache) {
         btnResetFailureCache.addEventListener('click', function () {
             apiPost('QuickStrm/Queue/Reset').then(function () {
-                loadQueue();
-                loadSummary();
+                fetchDashboard(view);
                 if (typeof Dashboard !== 'undefined' && Dashboard.alert) {
                     Dashboard.alert('Failure cache has been reset.');
                 }
@@ -1035,11 +1100,27 @@
         });
     }
 
+    if (btnResetBreaker) {
+        btnResetBreaker.addEventListener('click', function (e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            btnResetBreaker.disabled = true;
+            apiPost('QuickStrm/Circuit/Reset').then(function () {
+                btnResetBreaker.disabled = false;
+                fetchDashboard(view);
+                if (typeof Dashboard !== 'undefined' && Dashboard.alert) {
+                    Dashboard.alert('Circuit breaker has been reset to closed.');
+                }
+            }).catch(function (err) {
+                btnResetBreaker.disabled = false;
+                showAlert('Failed to reset circuit breaker: ' + extractErrorMessage(err));
+            });
+        });
+    }
+
     if (btnResetCircuit) {
         btnResetCircuit.addEventListener('click', function () {
-            apiPost('QuickStrm/CircuitBreaker/Reset').then(function () {
-                pollQueueStatus();
-                loadSummary();
+            apiPost('QuickStrm/Circuit/Reset').then(function () {
+                fetchDashboard(view);
                 if (typeof Dashboard !== 'undefined' && Dashboard.alert) {
                     Dashboard.alert('Circuit breaker has been reset to closed.');
                 }
@@ -1084,12 +1165,10 @@
 
     ctx.loadPageData = function () {
         initTabs();
-        loadSummary();
-        loadStatus();
-        loadQueue();
         loadConfig();
         loadAutoHealStatus();
         loadLedger();
+        startPolling();
     };
 
     view.addEventListener('viewshow', function () {

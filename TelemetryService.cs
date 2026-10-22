@@ -18,6 +18,28 @@ public class TelemetryService : IDisposable
     private readonly Timer _debounceSaveTimer;
     private bool _disposed;
 
+    private int _probedCount;
+    private int _prewarmedCount;
+    private int _healedCount;
+    private int _deletedCount;
+
+    /// <summary>Gets the total number of .strm files successfully probed.</summary>
+    public int ProbedCount => Volatile.Read(ref _probedCount);
+
+    /// <summary>Gets the total number of VFS streams prewarmed.</summary>
+    public int PrewarmedCount => Volatile.Read(ref _prewarmedCount);
+
+    /// <summary>Gets the total number of items queued into the recovery feed.</summary>
+    public int HealedCount => Volatile.Read(ref _healedCount);
+
+    /// <summary>Gets the total number of dead .strm files purged from disk.</summary>
+    public int DeletedCount => Volatile.Read(ref _deletedCount);
+
+    public void IncrementProbed() => Interlocked.Increment(ref _probedCount);
+    public void IncrementPrewarmed() => Interlocked.Increment(ref _prewarmedCount);
+    public void IncrementHealed() => Interlocked.Increment(ref _healedCount);
+    public void IncrementDeleted() => Interlocked.Increment(ref _deletedCount);
+
     /// <summary>
     /// Initializes a new instance of the <see cref="TelemetryService"/> class.
     /// </summary>
@@ -116,6 +138,8 @@ public class TelemetryService : IDisposable
     /// <param name="itemName">Optional item name.</param>
     public Task LogAutoHealAsync(string purgedPath, string? itemName = null)
     {
+        IncrementHealed();
+        IncrementDeleted();
         var overview = string.IsNullOrEmpty(itemName)
             ? purgedPath
             : $"{itemName} ({purgedPath})";

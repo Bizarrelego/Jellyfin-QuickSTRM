@@ -16,6 +16,17 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool EnableAutoProbe { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether proactive 3:00 AM sweep is enabled.
+    /// Alias for EnableAutoProbe.
+    /// </summary>
+    [System.Xml.Serialization.XmlIgnore]
+    public bool EnableProactiveSweeper
+    {
+        get => EnableAutoProbe;
+        set => EnableAutoProbe = value;
+    }
+
+    /// <summary>
     /// Alias for EnableAutoProbe.
     /// </summary>
     [System.Xml.Serialization.XmlIgnore]
@@ -40,6 +51,11 @@ public class PluginConfiguration : BasePluginConfiguration
         get => EnableAutoDelete;
         set => EnableAutoDelete = value;
     }
+
+    /// <summary>
+    /// Operational mode for manual library pre-probing.
+    /// </summary>
+    public ProbeMode ProbeMode { get; set; } = ProbeMode.OnlyUnprobed;
 
     /// <summary>
     /// Gets or sets the optional name of a marker file that exists on the cloud mount (searched up to 5 directory levels above

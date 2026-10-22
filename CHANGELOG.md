@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.0] - 2026-10-22
+
+### ⚡ Pipeline Consolidation, Dead-Code Purge, Adaptive UI & Tightened Benchmarks
+
+Major efficiency and modernization release unifying backend probing pipelines into a consolidated executor, purging dead helper methods, introducing a single-call aggregated dashboard API with adaptive client polling, adding instant-save maintenance toggles, and tightening gold-standard performance benchmarks.
+
+### Added
+- **Unified Dashboard API (`GET /QuickStrm/Dashboard`)**:
+  - Aggregates Queue statistics, live Telemetry metrics, and Auto-Heal queue status into a single low-overhead JSON payload executing in `< 5ms`.
+  - Replaces multi-endpoint frontend polling waterfalls with single-call updates.
+- **Manual Circuit Breaker Reset Endpoint (`POST /QuickStrm/Circuit/Reset`)**:
+  - Enables immediate recovery from false-positive mount outages or transient network partitions without requiring a server reboot.
+- **Active Recovery Queue UI**:
+  - Real-time display of unfulfilled media entries awaiting *arr replenishment with title, provider ID, media type, and added timestamps.
+- **Automated Dashboard & Circuit Reset Benchmarks (`DashboardEndpointTests.cs`)**:
+  - Verifies aggregated payload generation executes in `< 5ms` and manual circuit reset returns state to Closed immediately.
+
+### Changed
+- **Probe Execution Pipeline Consolidation (`ProbeService.cs`)**:
+  - Unified `ProbeItemCoreAsync` and `ProbeOneInlineAsync` paths into a single `ExecuteCoreProbeAsync` pipeline, eliminating code duplication across `.strm` target extraction, HTTP/VFS protocol handling, socket preflights, `IMediaEncoder` probing, and SQLite stream persistence.
+  - Purged unused legacy helper methods and fields.
+- **Zero-Allocation Extension Reuse (`ProbeService.IsStrmFile`)**:
+  - Centralized zero-allocation `ReadOnlySpan<char>` file extension validation with `[MethodImpl(MethodImplOptions.AggressiveInlining)]`, reused across `VfsPrewarmService`, `MediaSourceInterceptor`, `SessionMonitorService`, and `ProactiveSweeperTask`.
+- **Adaptive UI Polling Cadence (`configPage.js`)**:
+  - Dynamic polling switching between `1500ms` during active scans/probes and relaxing to `5000ms` when idle to eliminate client CPU and network overhead.
+- **Instant-Save Maintenance Toggles (`configPage.html` & `configPage.js`)**:
+  - Replaced checkboxes and manual form submit with modern iOS-style toggle switches featuring immediate auto-persistence and subtle inline "Saved" confirmations.
+- **Tightened Performance Benchmarks (`QuickSTRM.Tests`)**:
+  - Synchronous queue scan dispatch ceiling lowered from `< 5ms` to `< 3ms` (`PerformanceTests.cs`).
+  - 250,000-item library probe scan ceiling tightened from `< 15ms` to `< 10ms` (`ScaleTests.cs`).
+  - Per-call `.strm` read allocation ceiling tightened from `<= 2048 bytes` to `<= 1024 bytes` (`MemoryTests.cs`).
+
+---
 ## [4.1.1] - 2026-10-22
 
 ### 🛠️ Pre-Probe Execution, SQLite Stream Persistence & Dual Timeout Hardening

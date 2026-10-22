@@ -45,7 +45,7 @@
 
             .quickstrm-metrics-grid {
                 display: grid;
-                grid-template-columns: repeat(4, 1fr);
+                grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
                 gap: 1em;
                 margin-bottom: 1.8em;
             }
@@ -244,6 +244,62 @@
                 animation: quickstrm-indeterminate 1.5s infinite linear;
             }
 
+            .qs-switch {
+                position: relative;
+                display: inline-block;
+                width: 44px;
+                height: 24px;
+                flex-shrink: 0;
+            }
+            .qs-switch input {
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+            .qs-slider {
+                position: absolute;
+                cursor: pointer;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background-color: rgba(255, 255, 255, 0.2);
+                transition: .25s ease;
+                border-radius: 24px;
+            }
+            .qs-slider:before {
+                position: absolute;
+                content: "";
+                height: 18px;
+                width: 18px;
+                left: 3px;
+                bottom: 3px;
+                background-color: white;
+                transition: .25s ease;
+                border-radius: 50%;
+            }
+            input:checked + .qs-slider {
+                background-color: var(--theme-primary-color, #00a4dc);
+            }
+            input:checked + .qs-slider:before {
+                transform: translateX(20px);
+            }
+            .qs-saved-badge {
+                font-size: 0.72em;
+                font-weight: 600;
+                color: #81c784;
+                background: rgba(76, 175, 80, 0.15);
+                border: 1px solid rgba(76, 175, 80, 0.3);
+                border-radius: 4px;
+                padding: 0.15em 0.55em;
+                opacity: 0;
+                transition: opacity 0.25s ease;
+                letter-spacing: 0.03em;
+            }
+            .qs-saved-badge.visible {
+                opacity: 1;
+            }
+
             .qs-checkbox-row {
                 display: flex;
                 align-items: center;
@@ -289,7 +345,7 @@
                     <h2 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">bolt</span>
                         QuickSTRM Management Suite
-                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v4.1.1</span>
+                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v4.2.0</span>
                     </h2>
                     <div style="font-size: 0.9em; color: var(--text-muted-color, #888); margin-top: 0.2em;">
                         Zero-Touch Playback Acceleration, Auto-Heal List Feeds &amp; Library Telemetry
@@ -366,31 +422,41 @@
             <!-- 1. Live Telemetry Grid -->
             <div class="quickstrm-metrics-grid">
                 <!-- Metric 1: Circuit State -->
-                <div class="quickstrm-metric-card">
+                <div class="quickstrm-metric-card" id="cardCircuitBreaker">
                     <div class="quickstrm-metric-title">Circuit State</div>
-                    <div id="metricCircuitState" class="quickstrm-metric-value" style="color: #4caf50;">Closed</div>
+                    <div id="statCircuitState" class="quickstrm-metric-value" style="color: #4caf50;">Closed</div>
                     <div id="metricCircuitSub" class="quickstrm-metric-sub">Normal Operation</div>
+                    <button is="emby-button" type="button" id="btnResetBreaker" class="raised emby-button" style="display: none; margin: 0.4em auto 0; padding: 0.2em 0.6em; font-size: 0.72em; background: #e53935; color: white; border-radius: 4px;">
+                        <span>Reset Breaker</span>
+                    </button>
                 </div>
 
-                <!-- Metric 2: Cooldown Timer -->
+                <!-- Metric 2: Total .strm Files -->
                 <div class="quickstrm-metric-card">
-                    <div class="quickstrm-metric-title">Cooldown Timer</div>
-                    <div id="metricCooldownTimer" class="quickstrm-metric-value">0:00</div>
-                    <div id="metricCooldownSub" class="quickstrm-metric-sub">Inactive</div>
+                    <div class="quickstrm-metric-title">Total .strm Files</div>
+                    <div id="statTotalStrm" class="quickstrm-metric-value">-</div>
+                    <div id="metricTotalStrmSub" class="quickstrm-metric-sub">Library Assets</div>
                 </div>
 
-                <!-- Metric 3: Queue Depth (High / Low) -->
+                <!-- Metric 3: Missing Stream Info -->
                 <div class="quickstrm-metric-card">
-                    <div class="quickstrm-metric-title">Queue Depth (High / Low)</div>
-                    <div id="metricQueueDepth" class="quickstrm-metric-value">0 / 0</div>
-                    <div id="metricQueueSub" class="quickstrm-metric-sub">0 High / 0 Low Lane</div>
+                    <div class="quickstrm-metric-title">Missing Stream Info</div>
+                    <div id="statUnprobedStrm" class="quickstrm-metric-value" style="color: #ff9800;">-</div>
+                    <div id="metricUnprobedSub" class="quickstrm-metric-sub">Awaiting Probe</div>
                 </div>
 
-                <!-- Metric 4: Active Probes -->
+                <!-- Metric 4: Probed Streams -->
                 <div class="quickstrm-metric-card">
-                    <div class="quickstrm-metric-title">Active Probes</div>
-                    <div id="metricActiveProbes" class="quickstrm-metric-value">0 / 2</div>
-                    <div id="metricActiveProbesSub" class="quickstrm-metric-sub">0 in cache</div>
+                    <div class="quickstrm-metric-title">Probed Streams</div>
+                    <div id="statProbedCount" class="quickstrm-metric-value" style="color: #4caf50;">-</div>
+                    <div id="metricProbedSub" class="quickstrm-metric-sub">Metadata Persisted</div>
+                </div>
+
+                <!-- Metric 5: VFS Prewarmed -->
+                <div class="quickstrm-metric-card">
+                    <div class="quickstrm-metric-title">VFS Prewarmed</div>
+                    <div id="statPrewarmedCount" class="quickstrm-metric-value" style="color: #00bcd4;">-</div>
+                    <div id="metricPrewarmedSub" class="quickstrm-metric-sub">Fast-Start Reads</div>
                 </div>
             </div>
 
@@ -432,6 +498,9 @@
                     </div>
                     <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit emby-button" style="margin: 0; min-width: 140px;">
                         <span>Start pre-probe</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnCancelScan" class="raised emby-button" style="margin: 0; min-width: 110px; display: none; background: #b71c1c; color: white;">
+                        <span>Cancel Scan</span>
                     </button>
                     <button is="emby-button" type="button" id="btnStopProbe" class="raised emby-button" style="margin: 0; min-width: 100px; display: none; background: #b71c1c; color: white;">
                         <span>Stop</span>
@@ -568,6 +637,39 @@
                     </div>
                 </div>
 
+                <!-- Active Recovery Queue Table -->
+                <div class="paperList" style="padding: 1.4em; margin-bottom: 1.8em; border-radius: 8px; background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.08));">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1em;">
+                        <div style="font-weight: 600; font-size: 1.05em; display: flex; align-items: center; gap: 0.5em; color: var(--text-color, #fff);">
+                            <span class="material-icons" style="font-size: 1.1em; color: var(--theme-primary-color, #00a4dc);">playlist_play</span>
+                            <span>Active Recovery Queue</span>
+                        </div>
+                        <div id="lblRecoveryQueueCount" class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4);">
+                            0 items
+                        </div>
+                    </div>
+
+                    <div id="emptyAutoHealMessage" style="padding: 2em; text-align: center; color: var(--text-muted-color, #888); font-size: 0.9em;">
+                        <span class="material-icons" style="font-size: 2em; color: #81c784; display: block; margin-bottom: 0.3em;">check_circle_outline</span>
+                        All media healthy — 0 items awaiting replacement
+                    </div>
+
+                    <div id="tableAutoHealContainer" style="display: none; overflow-x: auto;">
+                        <table id="tblAutoHealItems" style="width: 100%; border-collapse: collapse; font-size: 0.88em; text-align: left;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--line-color, rgba(255,255,255,0.12)); color: var(--text-muted-color, #aaa);">
+                                    <th style="padding: 0.6em 0.8em;">Title</th>
+                                    <th style="padding: 0.6em 0.8em; width: 100px;">Type</th>
+                                    <th style="padding: 0.6em 0.8em; width: 130px;">Provider ID</th>
+                                    <th style="padding: 0.6em 0.8em; width: 180px;">Added</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tblAutoHealBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- Self-Cleaning Mechanics Callout -->
                 <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--line-color, rgba(255,255,255,0.06)); border-radius: 6px; padding: 1em 1.2em; font-size: 0.85em; color: var(--text-muted-color, #999); line-height: 1.5;">
                     <div style="font-weight: 600; color: var(--text-color, #fff); margin-bottom: 0.4em; display: flex; align-items: center; gap: 0.4em;">
@@ -591,51 +693,75 @@
                         Probing &amp; Mount Protection
                     </h3>
 
-                    <div style="margin-bottom: 1.2em;">
-                        <label class="qs-checkbox-row">
-                            <input type="checkbox" id="chkEnableSweeper" class="qs-checkbox" />
-                            <span>Auto-probe new .strm items on library add</span>
+                    <!-- Toggle Switch 1: Enable 3:00 AM Proactive Sweeper & Auto-Probe -->
+                    <div class="qs-switch-row" style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
+                        <div style="flex: 1; padding-right: 1.5em;">
+                            <div style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
+                                <span>Enable 3:00 AM Proactive Sweeper</span>
+                                <span id="badgeSavedSweeper" class="qs-saved-badge">Saved</span>
+                            </div>
+                            <div class="fieldDescription" style="margin-top: 0.3em;">Automatically probes new .strm additions upon import and executes nightly deep health sweeps.</div>
+                        </div>
+                        <label class="qs-switch">
+                            <input type="checkbox" id="chkEnableSweeper" />
+                            <span class="qs-slider"></span>
                         </label>
-                        <div class="fieldDescription">Automatically triggers an asynchronous probe (Low Priority) whenever a new .strm file is detected by the library manager.</div>
                     </div>
 
-                    <div style="margin-bottom: 1.2em;">
-                        <label class="qs-checkbox-row">
-                            <input type="checkbox" id="chkEnableAutoHeal" class="qs-checkbox" />
-                            <span>Enable 404 Auto-Heal &amp; *arr Search</span>
+                    <!-- Toggle Switch 2: Enable 404 Auto-Heal -->
+                    <div class="qs-switch-row" style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
+                        <div style="flex: 1; padding-right: 1.5em;">
+                            <div style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
+                                <span>Enable 404 Auto-Heal</span>
+                                <span id="badgeSavedAutoHeal" class="qs-saved-badge">Saved</span>
+                            </div>
+                            <div class="fieldDescription" style="margin-top: 0.3em;">Deletes dead .strm files on deterministic HTTP 404 and publishes missing IDs to the self-cleaning *arr feeds.</div>
+                        </div>
+                        <label class="qs-switch">
+                            <input type="checkbox" id="chkEnableAutoHeal" />
+                            <span class="qs-slider"></span>
                         </label>
-                        <div class="fieldDescription">Deletes the .strm file and removes it from the library when its pre-flight check returns a deterministic HTTP 404. Automatically halted when the circuit breaker is tripped.</div>
                     </div>
 
-                    <div style="margin-bottom: 1.2em;">
-                        <label class="qs-checkbox-row">
-                            <input type="checkbox" id="chkEnableNextEpisodePreWarm" class="qs-checkbox" />
-                            <span>Enable Next-Episode Pre-Warming</span>
+                    <!-- Toggle Switch 3: Next-Episode Pre-Warming -->
+                    <div class="qs-switch-row" style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
+                        <div style="flex: 1; padding-right: 1.5em;">
+                            <div style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
+                                <span>Enable Next-Episode Pre-Warming</span>
+                                <span id="badgeSavedNextEp" class="qs-saved-badge">Saved</span>
+                            </div>
+                            <div class="fieldDescription" style="margin-top: 0.3em;">Pre-warms and probes upcoming episodes immediately when playback begins.</div>
+                        </div>
+                        <label class="qs-switch">
+                            <input type="checkbox" id="chkEnableNextEpisodePreWarm" />
+                            <span class="qs-slider"></span>
                         </label>
-                        <div class="fieldDescription">When playback starts on an episode, automatically enqueues the immediately following episode into the High Priority probe lane so its stream info is resolved before the current episode finishes.</div>
                     </div>
 
-                    <div style="margin-bottom: 1.2em;">
-                        <label class="qs-checkbox-row">
-                            <input type="checkbox" id="chkSynthesizeVirtualChapters" class="qs-checkbox" />
-                            <span>Synthesize 5-Minute Virtual Chapters</span>
+                    <!-- Toggle Switch 4: Synthesize Virtual Chapters -->
+                    <div class="qs-switch-row" style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
+                        <div style="flex: 1; padding-right: 1.5em;">
+                            <div style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
+                                <span>Synthesize 5-Minute Virtual Chapters</span>
+                                <span id="badgeSavedChapters" class="qs-saved-badge">Saved</span>
+                            </div>
+                            <div class="fieldDescription" style="margin-top: 0.3em;">Generates virtual chapter markers every 5 minutes once runtime is resolved.</div>
+                        </div>
+                        <label class="qs-switch">
+                            <input type="checkbox" id="chkSynthesizeVirtualChapters" />
+                            <span class="qs-slider"></span>
                         </label>
-                        <div class="fieldDescription">Once runtime is resolved on a .strm item, creates virtual chapter markers every 5 minutes if 0 chapters exist, enabling users to jump around effortlessly without heavy chapter extraction.</div>
                     </div>
 
-                    <div class="inputContainer" style="margin-bottom: 1.4em;">
+                    <div class="inputContainer" style="margin-top: 1.2em; margin-bottom: 0.5em;">
                         <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input" label="Mount Marker File Name (Optional)" />
-                        <div class="fieldDescription">A verification file that must exist on your cloud mount (e.g. .mount_ok). Traverses up to 5 parent folders above each .strm. If missing, failures are treated as a dropped mount and deletion is suppressed. If empty, an empty parent folder is treated as a dropped mount.</div>
+                        <div class="fieldDescription">A verification file that must exist on your cloud mount (e.g. .mount_ok). Traverses up to 5 parent folders above each .strm. If missing, failures are treated as a dropped mount and deletion is suppressed.</div>
                     </div>
 
                     <!-- Hidden alias to preserve backward compatibility if needed -->
                     <input type="hidden" id="txtJellyfinBaseUrl" />
-
-                    <div>
-                        <button is="emby-button" type="submit" id="btnSaveMaintenanceSettings" class="raised button-submit block emby-button">
-                            <span>Save Maintenance Settings</span>
-                        </button>
-                    </div>
+                    <!-- Hidden button for programmatic submit compatibility -->
+                    <button is="emby-button" type="submit" id="btnSaveMaintenanceSettings" style="display: none;"></button>
                 </div>
             </form>
 
