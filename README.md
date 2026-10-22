@@ -9,24 +9,25 @@
 </p>
 
 <p align="center">
-  <strong>QuickSTRM v3.2.0 — The Definitive Zero-Touch Orchestration Suite, Predictive Pre-Warmer, and Autonomous Auto-Healing Pipeline for Cloud-Mounted .STRM Libraries on Jellyfin 12.2+.</strong>
+  <strong>QuickSTRM v4.1.0 — Zero-Overhead Playback Acceleration, Native Self-Cleaning Auto-Heal List Feeds, and Autonomous Maintenance for Cloud-Mounted .STRM Libraries on Jellyfin 12.2+.</strong>
 </p>
 
 ---
 
 ## ⚡ Overview & Core Pitch
 
-**QuickSTRM v3.2.0** is the definitive zero-touch `.strm` orchestration suite, playback acceleration engine, and automated maintenance system engineered natively for **Jellyfin 12.2+** on **.NET 10.0**.
+**QuickSTRM v4.1.0** is the definitive zero-touch `.strm` orchestration suite, playback acceleration engine, and automated maintenance system engineered natively for **Jellyfin 12.2+** on **.NET 10.0**.
 
-Managing cloud-mounted media libraries (such as Rclone, InfiniDysk, Google Drive, or WebDAV mounts) traditionally introduces crippling latency, dropped streams, and constant administrative intervention. Remote media links expire or 404, cloud mount spin-up times leave clients hanging on indefinite loading spinners, background trickplay extractors thrash network bandwidth, and concurrent webhook floods lock SQLite databases.
+Managing cloud-mounted media libraries (such as Rclone, InfiniDysk, Google Drive, or WebDAV mounts) traditionally introduces crippling latency, dropped streams, and constant administrative intervention. Remote media links expire or 404, cloud mount spin-up times leave clients hanging on indefinite loading spinners, background trickplay extractors thrash network bandwidth, and legacy webhook orchestrations introduce brittle API key dependencies.
 
 **QuickSTRM delivers complete, in-process automation natively inside Jellyfin:**
 
 * 🚀 **Instant Sub-Second Playback**: Decorates Jellyfin's `IMediaSourceManager` in the dependency injection container, bypassing remote `ffprobe` operations for already-probed `.strm` media.
-* ⚡ **Predictive VFS Pre-Warming**: Intercepts item detail page loads in ASP.NET Core middleware (`^/Users/[^/]+/Items/([^/]+)$`) to non-blockingly page the first 5MB of video into RAM, priming network sockets and eliminating cloud storage spin-up latency before the user presses "Play".
-* 🤖 **Zero-Touch \*arr Suite Orchestration**: Automatically provisions, synchronizes, and configures authenticated webhooks inside **Radarr**, **Sonarr**, and **Whisparr**—and cleans them up with a single click upon removal.
-* 🩺 **Autonomous 404 Auto-Healing**: Deterministically intercepts broken or removed cloud links during playback, pre-flight checks, or scheduled sweeps, reverse-translates paths to the corresponding \*arr instance, deletes the dead file record, and triggers an immediate automated replacement grab.
-* 🧹 **Proactive Dead Link Sweeper**: Native daily scheduled task running at 3:00 AM with paced HTTP HEAD verification (1000ms delay between items) to automatically trigger 404 auto-healing and replacement grabs before playback is attempted.
+* ⚡ **Predictive VFS Pre-Warming**: Intercepts item detail page loads in ASP.NET Core middleware (`^/(?:Users/[^/]+/)?Items/([0-9a-fA-F-]+)$`) to non-blockingly page the first 5MB of video into RAM, priming network sockets and eliminating cloud storage spin-up latency before the user presses "Play".
+* 🌿 **Zero-Overhead Native Auto-Heal List Feeds**: Replaces bloated \*arr REST API polling and webhook synchronization with high-efficiency, pull-based native Custom List feeds (`/QuickStrm/AutoHeal/Radarr` and `/QuickStrm/AutoHeal/Sonarr`). Zero API keys, zero base URLs, and zero port-forwarding required.
+* 🧹 **Event-Driven Pruning & 7-Day TTL Eviction**: Subscribes directly to Jellyfin's `ItemAdded` and `ItemUpdated` events to immediately evict fulfilled items from the recovery feeds when grabbed, paired with an automated 7-day TTL sweep so impossible-to-find releases never bloat list ingestion.
+* 🩺 **Autonomous 404 Auto-Healing**: Deterministically intercepts broken or removed cloud links during playback, pre-flight checks, or scheduled sweeps, purges the dead `.strm` file from disk, refreshes the Jellyfin parent folder for immediate UI removal, and pushes the TMDB/TVDB provider ID to the native recovery feed.
+* 🧹 **Proactive Dead Link Sweeper**: Native daily scheduled task running at 3:00 AM with paced HTTP HEAD verification (1000ms delay between items) to automatically trigger 404 auto-healing before playback is attempted.
 * 📺 **Next-Episode Pre-Warming**: Predictively resolves the next sequential episode in the High Priority lane upon playback start, eliminating buffer stalls on streaming devices (Fire TV Stick 4K, Astra, Apple TV) during continuous binge-watching.
 * 🌐 **Absolute URL Pre-Resolution**: Automatically executes lightweight HTTP HEAD checks with `AllowAutoRedirect = false` when reading `.strm` files, caching direct-to-IP URLs from 301/302/307 redirects to bypass playback redirect hops on streaming clients.
 * 🛑 **Hardened 8-Second FFprobe Killswitch**: Strict 8-second execution timeout wrapping all probe operations; unresolvable links are aborted and negative-cached for 1 hour to prevent client UI infinite-spinning.
@@ -88,7 +89,7 @@ If an upstream cloud mount (Rclone, Google Drive, WebDAV) drops, probing hundred
 
 ## 🚀 Performance & Scale (Aspirational Benchmarks)
 
-QuickSTRM v3.2.0 introduces a rigorous benchmark-driven performance architecture verified by aspirational test suites establishing strict performance ceilings. If the codebase cannot satisfy these bounds, tests fail deterministically:
+QuickSTRM v4.1.0 introduces a rigorous benchmark-driven performance architecture verified by aspirational test suites establishing strict performance ceilings. If the codebase cannot satisfy these bounds, tests fail deterministically:
 
 | Benchmark Directive | Metric / Ceiling | Technical Enforcement | Architecture Impact |
 | :--- | :--- | :--- | :--- |
@@ -153,38 +154,45 @@ Check Stream Info in Database    100% Synchronous Passthrough
 
 ---
 
-## 🔄 The "Auto-Heal on 404" Pipeline
+## 🔄 The Self-Cleaning Auto-Heal Pipeline
 
-QuickSTRM bridges Jellyfin and your \*arr media managers into a closed-loop, self-healing system:
+QuickSTRM bridges Jellyfin and your \*arr media managers into a zero-overhead, pull-based recovery pipeline:
 
 ```text
-[ Dead Link Encountered (404 / 3:00 AM Sweep / Probe Failure) ]
+[ Dead Link Encountered (404 / 503 / Hold-Open Retries Exhausted) ]
                         │
                         ▼
             [ Mount Marker Validation ]
       (Ensures mount is online; prevents false purge)
                         │
                         ▼
-       [ Delete File Record in Radarr / Sonarr / Whisparr ]
-        DELETE /api/v3/moviefile/{id} OR /api/v3/episodefile/{id}
+             [ Delete Physical .strm File ]
                         │
                         ▼
-         [ Automated Replacement Search Command ]
-           POST /api/v3/command { name: "EpisodeSearch" / "MoviesSearch" }
+        [ Refresh Parent Folder Metadata in Jellyfin ]
+         (Item immediately vanishes from Jellyfin UI)
                         │
                         ▼
-      [ Usenet / Torrent Grabbers Fetch Working Stream ]
+      [ Push TMDB / TVDB ID to AutoHealService Feed ]
                         │
                         ▼
-        [ Telemetry Logged to Native Ledger & Activity Manager ]
+   [ *arr Custom List Ingestion (Radarr / Sonarr) ]
+    GET /QuickStrm/AutoHeal/Radarr OR /QuickStrm/AutoHeal/Sonarr
+                        │
+                        ▼
+    [ Download Clients Grab Working Stream Replacement ]
+                        │
+                        ▼
+   [ Fulfilled Item Imported -> Pruned from Feed via ItemAdded ]
 ```
 
-1. **Deterministic 404 Detection**: When a `.strm` pre-flight check, playback attempt, or proactive sweeper returns an HTTP 404, QuickSTRM initiates the auto-heal workflow.
-2. **Mount Protection Gate**: QuickSTRM verifies that the cloud mount is healthy (via folder contents or `.mount_ok` marker), preventing mass deletions caused by dropped mounts.
-3. **Reverse Path Translation**: QuickSTRM translates the local Jellyfin filesystem path to the remote scheme (`PathTo` &rarr; `PathFrom`) recognized by Radarr/Sonarr.
-4. **File Record Deletion**: QuickSTRM calls the \*arr REST API to remove the dead movie or episode file record.
-5. **Automated Search Trigger**: Immediately dispatches an authenticated search command (`MoviesSearch`, `EpisodeSearch`, or `SeriesSearch`). Connected download clients automatically grab a working release without user intervention.
-6. **Native Telemetry Audit**: Logs the purged path to Jellyfin's native `IActivityManager` and appends an entry to the rolling **Recent Actions** ledger.
+1. **Deterministic Dead Link Interception**: When a `.strm` link returns a hard 404/503 during playback or scheduled scans and exhausts all hold-open retries, QuickSTRM triggers immediate auto-healing.
+2. **Mount Protection Gate**: QuickSTRM verifies that the cloud mount is healthy (via `.mount_ok` marker or directory check), preventing mass deletions if a network mount disconnects.
+3. **Physical File Removal & Instant UI Refresh**: QuickSTRM deletes the dead `.strm` file directly from the filesystem and instructs Jellyfin's `ILibraryManager` to refresh the parent folder so the broken item disappears from user interfaces immediately.
+4. **Provider ID Feed Ingestion**: Extracts the item's TMDB ID (for Movies) or TVDB ID (for Series/Episodes) and enqueues it into `AutoHealService`.
+5. **Native Custom List Ingestion**: Radarr and Sonarr poll their respective native list endpoints (`/QuickStrm/AutoHeal/Radarr` and `/QuickStrm/AutoHeal/Sonarr`) without requiring API keys, webhook provisioning, or port forwarding.
+6. **Event-Driven Automatic Pruning**: When a replacement video file is grabbed and added to Jellyfin, `ILibraryManager.ItemAdded` and `ItemUpdated` automatically extract its provider IDs and purge the entry from the recovery dictionary.
+7. **7-Day TTL Expiration Sweep**: Entries older than 7 days are automatically evicted during periodic background sweeps, preventing rare or unavailable releases from permanently bloating the recovery list.
 
 ---
 
@@ -207,55 +215,32 @@ QuickSTRM integrates directly into the native Jellyfin administrator dashboard a
 
 ### Modern Segmented 3-Tab Enterprise Dashboard
 
-QuickSTRM v3.2.0 introduces a modern, high-density tabbed administrative layout:
+QuickSTRM v4.1.0 features a clean, high-density tabbed administrative layout:
 
 1. **📊 Overview & Probing Tab**:
    * **Real-Time Summary Metrics**: Instant visibility into total `.strm` files, probed streams, unprobed items, and cache efficiency.
    * **Telemetry & Circuit Breaker**: Live monitoring of High/Low priority probe queues, active worker slots, negative cache depth, and circuit breaker trip states.
    * **Background Probe Controller**: Trigger non-blocking **Incremental** (unprobed items only) or **Full** (library-wide re-probe) passes with real-time percentage progress bars and cancel controls.
-2. **🔌 *arr Integrations Tab**:
-   * **Enterprise Service Cards**: Color-coded badges for **Radarr** (Blue), **Sonarr** (Cyan), and **Whisparr** (Purple).
-   * **Connection Status Badges**: Real-time status pills displaying active webhook IDs (`SYNCED #12`) or sync failure states (`SYNC FAILED`).
-   * **Inline Diagnostics Callouts**: Instant, human-readable error summaries if connectivity or authentication fails (with ASP.NET Core stack traces automatically stripped).
-   * **1-Click Per-Card Sync & Test**: Test and provision individual instances directly from their cards without full-suite re-syncing.
-   * **Docker Loopback Conflict Warning**: Automatic heuristic alert if your Jellyfin internal URL is configured with `localhost` or `127.0.0.1` while *arr services run on external or container network hostnames.
+2. **🌿 Auto-Heal Lists Tab**:
+   * **Native Custom List Feed URLs**: Dedicated endpoints for **Radarr** (`http://[server-ip]:8096/QuickStrm/AutoHeal/Radarr`) and **Sonarr** (`http://[server-ip]:8096/QuickStrm/AutoHeal/Sonarr`).
+   * **One-Click URL Copying**: Instant clipboard copy buttons for effortless setup in your \*arr List settings.
+   * **Live Recovery Counters**: Real-time counter pills showing exactly how many missing movies and series are currently awaiting replenishment.
+   * **Zero Configuration Overhead**: No API keys, no base URLs, and no manual "Clear/Flush" buttons required (feeds are completely self-cleaning).
 3. **🛠️ Maintenance & Advanced Tab**:
    * **Streaming Diagnostics & Cache Control**: Flush negative probe caches to retry previously failed streams.
    * **Bulk URL Rewrite Utility**: Safely migrate upstream CDN endpoints or credentials across all library `.strm` files in bulk with dry-run verification.
-   * **Live "Recent Actions" Ledger**: Live-scrolling event log tracking auto-heals, circuit breaker transitions, and webhook synchronizations.
+   * **Live "Recent Actions" Ledger**: Live-scrolling event log tracking auto-heals, circuit breaker transitions, and maintenance actions.
 
-### 1-Click Zero-Touch *arr Setup
+### 2-Minute Radarr / Sonarr List Setup
 
-1. Open your Jellyfin Web Client and click the **QuickSTRM** tab in the sidebar navigation menu (or navigate to **Dashboard -> QuickSTRM**).
-2. Switch to the ***arr Integrations** tab and click **+ Add Instance**.
-3. Fill in your instance details:
-   * **Instance Name**: e.g., `Radarr 4K` or `Sonarr TV`
-   * **Application Type**: Select `Radarr`, `Sonarr`, or `Whisparr`
-   * **Base URL**: e.g., `http://192.168.1.50:7878` or `http://sonarr:8989` (trailing slashes and URL formatting are automatically handled)
-   * **API Key**: Found in your \*arr instance under *Settings -> General -> Security*
-   * **Remote Path (\*arr)** & **Local Path (Jellyfin)**: Leave blank if your \*arr container and Jellyfin container share the exact same volume mounts.
-   * **Auto-Heal on 404**: Checked by default to enable automatic dead link replacement.
-4. Click **Test Connection** to perform an immediate, non-mutating live connectivity check against the \*arr API.
-5. Click **Save Connection**. QuickSTRM dynamically negotiates the schema (`GET /api/v3/notification/schema`), generates an exact engine-compatible payload (eliminating `ControllerActionInvoker` 500 exceptions in v3/v4), and provisions a secured webhook named `QuickSTRM Auto-Sync` with an auto-generated cryptographic token (`?token={WebhookSecret}`).
-6. The instance card will instantly reflect an active **Synced** status pill.
-
-### Docker Container Networking & Localhost Warnings
-When Jellyfin and \*arr services run inside Docker containers, configuring `Jellyfin Internal / Host URL` as `http://localhost:8096` or `http://127.0.0.1:8096` causes webhook callbacks from the \*arr container to fail, because `localhost` inside the \*arr container resolves to itself, not Jellyfin. QuickSTRM's UI automatically detects this configuration mismatch and provides an immediate warning banner with actionable remediation advice (e.g. using `http://jellyfin:8096` or host IP).
-
-### Editing Existing Connections
-Click the **Edit** button on any configured instance card to load its parameters into the slide-over drawer, make adjustments, and click **Update Connection** to commit updates in-place.
-
-### Monitoring via the "Recent Actions" Ledger
-Switch to the **Maintenance & Advanced** tab to inspect a live, scrolling ledger of the last 100 system events:
-* **STRM Auto-Heal Events**: Highlighted with purged file paths and item titles.
-* **Circuit Breaker Transitions**: Clear timestamps indicating `Tripped` or `Reset` states and cooldown remaining.
-* **Manual Refresh**: Click **Refresh Ledger** at any time to pull the latest state directly from `GET /QuickStrm/Ledger`.
-
-### Resilient Startup Retry Policy
-If Jellyfin boots faster than your Radarr or Sonarr containers (common in Docker Compose environments), QuickSTRM runs a 5-attempt background retry loop with exponential backoff (`10s`, `20s`, `40s`, `80s`, `160s`) until your \*arr instances are reachable.
-
-### Clean Zero-Footprint Uninstall
-Click **Wipe All \*arr Webhooks** at any time to cleanly scrub all QuickSTRM-managed webhooks from Radarr, Sonarr, and Whisparr with a single native confirmation modal.
+1. Open your Jellyfin Web Client and click **QuickSTRM** in the sidebar.
+2. Switch to the **Auto-Heal Lists** tab.
+3. Copy the **Radarr Feed URL** or **Sonarr Feed URL**.
+4. In Radarr or Sonarr, navigate to **Settings -> Lists -> + (Add List)**:
+   * Select **Custom List** (or **Radarr Lists** / **Sonarr Lists**).
+   * Paste the copied URL into the List URL field.
+   * Save the list and configure your desired search settings.
+5. That's it! When QuickSTRM encounters a dead `.strm` link, Radarr and Sonarr automatically ingest the missing ID and trigger a replacement grab. When fulfilled, QuickSTRM prunes it immediately upon import.
 
 ---
 
@@ -314,19 +299,17 @@ All administrative endpoints require Jellyfin administrator privileges (`Require
 
 | Method | Endpoint | Authorization | Description |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/QuickStrm/Summary` | Admin | Returns total, probed, and unprobed `.strm` item counts. |
+| `GET` | `/QuickStrm/Summary` | Admin | Returns total, probed, unprobed `.strm` item counts, and auto-heal feed totals. |
 | `GET` | `/QuickStrm/Ledger` | Admin | Returns the recent action ledger entries (last 100 events). |
 | `GET` | `/QuickStrm/Queue` | Admin | Returns telemetry metrics, lane depths, circuit state, and cooldown remaining. |
 | `POST` | `/QuickStrm/Queue/Reset` | Admin | Flushes the 1-hour negative cache of failed probe items. |
 | `GET` | `/QuickStrm/Probe/Status` | Admin | Reports current batch probe task progress, percentage, and active file. |
 | `POST` | `/QuickStrm/Probe/Start` | Admin | Starts an Incremental or Full library pre-probe task. |
 | `POST` | `/QuickStrm/Probe/Stop` | Admin | Stops an active library probe task. |
-| `POST` | `/QuickStrm/Arr/TestConnection` | Admin | Performs an isolated, live connectivity test against a single \*arr instance without saving or provisioning. |
-| `POST` | `/QuickStrm/Arr/TestAndSync` | Admin | Manually tests connections and provisions/updates webhooks across all configured \*arr instances. |
-| `POST` | `/QuickStrm/Arr/SyncInstance/{index}` | Admin | Manually tests connection and provisions/updates webhooks for a specific \*arr instance. |
-| `POST` | `/QuickStrm/Arr/WipeWebhooks` | Admin | Cleanly deletes all QuickSTRM webhooks across all configured \*arr instances for a zero-footprint uninstall. |
+| `GET` | `/QuickStrm/AutoHeal/Radarr` | Public | Native Custom List feed returning missing TMDB Movie IDs for Radarr ingestion. |
+| `GET` | `/QuickStrm/AutoHeal/Sonarr` | Public | Native Custom List feed returning missing TVDB Series IDs for Sonarr ingestion. |
+| `GET` | `/QuickStrm/AutoHeal/Summary` | Public / Admin | Returns live count of active items in Radarr and Sonarr recovery feeds. |
 | `POST` | `/QuickStrm/Tools/RewriteUrls` | Admin | Bulk rewrites target URL schemes across all `.strm` files (supports Dry Run preview). |
-| `POST` | `/QuickStrm/ArrWebhook` | Token (`?token=...`) | Receives incoming grab/download notifications from Radarr, Sonarr, and Whisparr with strict JSON schema validation. |
 
 ---
 

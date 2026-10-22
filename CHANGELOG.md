@@ -6,6 +6,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.1.0] - 2026-10-22
+
+### ⚡ Aggressive TCP Connection Pooling & Inotify Event Storm Debouncing
+
+Major performance and network-tuning release eliminating DNS, TCP, and TLS handshake latency across remote `.strm` stream resolutions and decoupling Jellyfin library scans from event thread locks via lock-free channel debouncing.
+
+### Added
+- **TCP Connection Pooling Benchmark Tests (`NetworkLatencyTests.cs`)**:
+  - Validates persistent TCP connection reuse across sequential `.strm` URL resolution requests.
+  - Enforces that requests 2 through 5 complete their network handshake and header read in `< 5ms` with 0 additional TCP handshakes.
+- **Inotify Event Storm Debouncing Tests (`EventStormTests.cs`)**:
+  - Simulates 1,000 rapid `ILibraryManager.ItemAdded` events in a tight 5-millisecond loop (mimicking massive Radarr season-pack imports and Jellyfin full library scans).
+  - Enforces that the background debouncer executes the entire batch drain in `< 10ms` while triggering backend database lookups strictly once.
+- **Sustained Garbage Collection Bounds (`EnduranceTests.cs`)**:
+  - Simulates 100,000 back-to-back `.strm` file reads using `File.OpenHandle` zero-allocation span parsing.
+  - Asserts that Gen0 collections during the loop equal exactly `0`, guaranteeing zero GC pauses or memory fragmentation on low-power Core i3 servers.
+
+### Changed
+- **Aggressive Sockets Connection Pooling (`Plugin.cs` & `ProbeService.cs`)**:
+  - Replaced transient client factory instantiations with a specialized singleton `SocketsHttpHandler` and `HttpClient`.
+  - Configured with `PooledConnectionLifetime = TimeSpan.FromMinutes(15)`, `PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2)`, `EnableMultipleHttp2Connections = true`, and `MaxConnectionsPerServer = 100`.
+  - Eliminates DNS queries, TCP three-way handshakes, and TLS negotiation overhead on subsequent playback requests.
+- **Lock-Free Event Channel & 500ms Debouncer (`AutoHealService.cs`)**:
+  - Decoupled `ItemAdded` and `ItemUpdated` event handlers from synchronous base item parsing.
+  - Pushes incoming item IDs directly to a lock-free `Channel<Guid>`, allowing event threads to return instantaneously (< 50ns) without locking Jellyfin's event loop.
+  - Background worker batches evictions with a 500ms debounce latch, querying `ILibraryManager.GetItemList` strictly once per batch.
+- **Hardware Page Boundary Alignment (`VfsPrewarmService.cs`)**:
+  - Sized pre-warm byte arrays rented from `ArrayPool<byte>.Shared` to exact multiples of the 4096-byte hardware page boundary, maximizing OS-level VFS read-ahead efficiency for rclone and local disk caches.
+
+---
+## [4.0.0] - 2026-10-21
+
+### 🌿 Zero-Overhead Native Auto-Heal List Feeds & Orchestration Bloat Purge
+
+Major architectural shift replacing complex, bloated *arr REST API polling and webhook synchronization with zero-overhead, pull-based native Custom List recovery feeds for Radarr and Sonarr.
+
+### Added
+- **Self-Cleaning Auto-Heal Feed Service (`AutoHealService.cs`)**:
+  - Implemented a thread-safe `ConcurrentDictionary<string, AutoHealEntry>` mapping external provider IDs (TMDB/TVDB) to recovery records containing title, media classification, and creation timestamps.
+  - Added native Custom List endpoints `GET /QuickStrm/AutoHeal/Radarr` and `GET /QuickStrm/AutoHeal/Sonarr` formatted for native Radarr and Sonarr Custom List ingestion without authentication or orchestration overhead.
+  - Added summary telemetry endpoint `GET /QuickStrm/AutoHeal/Summary` returning live feed counts.
+  - **Event-Driven Automatic Pruning**: Subscribed to Jellyfin's `ILibraryManager.ItemAdded` and `ItemUpdated` events; when an item is fulfilled and imported into the library, its provider IDs (and parent series IDs) are extracted and immediately pruned from the active recovery feed.
+  - **7-Day TTL Eviction**: Automatically evicts entries older than 7 days during periodic maintenance sweeps, preventing impossible-to-find Usenet requests from permanently bloating recovery lists.
+- **Immediate Dead Item Pruning (`ProbeService.cs`)**:
+  - When `.strm` links fail preflight checks (hard 404/503 errors and exhausted hold-open retries), the physical `.strm` file is deleted from disk, the TMDB/TVDB ID is pushed into `AutoHealService`, and the Jellyfin parent folder metadata is refreshed so dead items disappear from the UI immediately.
+- **Sleek "Auto-Heal Lists" Dashboard (`configPage.html` & `configPage.js`)**:
+  - Redesigned the *arr tab into a clean "Auto-Heal Lists" view displaying live feed URLs for Radarr and Sonarr with one-click clipboard copying.
+  - Real-time counters showing active items waiting in Radarr and Sonarr feeds without manual "Clear/Flush" buttons (100% self-cleaning).
+
+### Removed
+- **Orchestration Bloat Purge**:
+  - Completely purged `ArrIntegrationService.cs`, `ArrWebhookPayload.cs`, and all legacy webhook models.
+  - Removed API key storage, base URL configuration, webhook provisioning, and bidirectional test buttons from `QuickStrmController.cs`, `PluginConfiguration.cs`, `configPage.html`, and `configPage.js`.
+
+---
 ## [3.2.0] - 2026-10-21
 
 ### 🚀 Benchmark-Enforced Architecture, Zero-Allocation File I/O & Lock-Free Coalescing

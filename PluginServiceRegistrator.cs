@@ -28,15 +28,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<ProbeService>();
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ProbeService>());
 
-        // Register ArrIntegrationService as singleton + hosted service, wire 404 auto-healing event
-        serviceCollection.AddSingleton<ArrIntegrationService>();
-        serviceCollection.AddSingleton<IHostedService>(sp =>
-        {
-            var arr = sp.GetRequiredService<ArrIntegrationService>();
-            var probe = sp.GetRequiredService<ProbeService>();
-            probe.OnStrmDeleted += path => arr.TriggerArrHealAsync(path);
-            return arr;
-        });
+        // Register AutoHealService as singleton + hosted service for event-driven list pruning
+        serviceCollection.AddSingleton<AutoHealService>();
+        serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<AutoHealService>());
 
         // Register SessionMonitorService as singleton + hosted service for next-episode pre-warming
         serviceCollection.AddSingleton<SessionMonitorService>();

@@ -124,7 +124,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     // protects low-end CPUs (e.g. Core i3): hard ceiling of exactly 2 concurrent ffprobe-backed refreshes across ALL callers
     // (bulk, auto-probe and inline), so probes can never exceed the 2 threads we can spare without starving playback
-    private const int MaxConcurrentProbes = 2;
+    public const int MaxConcurrentProbes = 2;
     private readonly SemaphoreSlim _probeGate = new(MaxConcurrentProbes, MaxConcurrentProbes);
 
     // protects bulk imports: generous 60s lets slow cloud-drive links finish without failing the library scan
@@ -155,12 +155,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     // pre-flight HEAD must answer within 500ms or the link is treated as dead, so no ffprobe slot is spent on it
     private static readonly TimeSpan PreflightTimeout = TimeSpan.FromMilliseconds(500);
-    // instance (not static) so it is disposed on plugin unload and doesn't pin the plugin's AssemblyLoadContext; a bounded connection
-    // lifetime still gives DNS refresh without socket churn
-    private readonly HttpClient _preflightClient = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) })
-    {
-        Timeout = TimeSpan.FromSeconds(5)
-    };
+    // Singleton or injected client backed by specialized SocketsHttpHandler connection pool
+    private readonly HttpClient _preflightClient;
 
     // caps simultaneous pre-flight HEADs (e.g. a 50-item season pack import) to avoid socket exhaustion, remote 429s and queue-induced
     // false timeouts; entirely separate from _probeGate, which still governs ffprobe processes
@@ -213,6 +209,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly TelemetryService _telemetryService;
     private readonly IMediaEncoder _mediaEncoder;
     private readonly IMediaSourceManager? _mediaSourceManager;
+    private readonly AutoHealService? _autoHealService;
 
     public ProbeService(
         ILibraryManager libraryManager,
@@ -223,7 +220,9 @@ public sealed class ProbeService : IHostedService, IDisposable
         ILogger<ProbeService> logger = null!,
         TelemetryService telemetryService = null!,
         IItemRepository? itemRepository = null,
-        IMediaSourceManager? mediaSourceManager = null)
+        IMediaSourceManager? mediaSourceManager = null,
+        AutoHealService? autoHealService = null,
+        HttpClient? httpClient = null)
     {
         _telemetryService = telemetryService;
         _activityManager = activityManager;
@@ -233,6 +232,8 @@ public sealed class ProbeService : IHostedService, IDisposable
         _logger = logger;
         _itemRepository = itemRepository;
         _mediaSourceManager = mediaSourceManager;
+        _autoHealService = autoHealService;
+        _preflightClient = httpClient ?? Plugin.HttpClient;
     }
 
     // ── IHostedService lifecycle ──
@@ -488,6 +489,14 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     /// <summary>
+    /// Flushes the static resolved URL cache.
+    /// </summary>
+    public static void ClearResolvedUrlCache()
+    {
+        _resolvedUrlCache.Clear();
+    }
+
+    /// <summary>
     /// Flushes the negative failure cache, allowing previously failed items to be retried immediately.
     /// </summary>
     public void ClearFailureCache()
@@ -695,14 +704,72 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     // Lightweight client with AllowAutoRedirect disabled for single-hop redirect pre-resolution
-    internal static HttpClient _redirectResolutionClient = new(new SocketsHttpHandler
+    internal static HttpClient _redirectResolutionClient = Plugin.HttpClient;
+
+    /// <summary>
+    /// Parses the first valid non-empty .strm line from a raw UTF-8 byte span into destination chars without heap allocations.
+    /// </summary>
+    public static bool TryExtractFirstStrmLine(ReadOnlySpan<byte> utf8Bytes, Span<char> destination, out int charsWritten)
     {
-        AllowAutoRedirect = false,
-        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
-    })
+        // Strip UTF-8 BOM if present (0xEF, 0xBB, 0xBF)
+        if (utf8Bytes.Length >= 3 && utf8Bytes[0] == 0xEF && utf8Bytes[1] == 0xBB && utf8Bytes[2] == 0xBF)
+        {
+            utf8Bytes = utf8Bytes.Slice(3);
+        }
+
+        while (!utf8Bytes.IsEmpty)
+        {
+            int lineEnd = utf8Bytes.IndexOfAny((byte)'\r', (byte)'\n');
+            ReadOnlySpan<byte> lineBytes = lineEnd >= 0 ? utf8Bytes.Slice(0, lineEnd) : utf8Bytes;
+
+            if (lineEnd >= 0)
+            {
+                utf8Bytes = utf8Bytes.Slice(lineEnd);
+                while (!utf8Bytes.IsEmpty && (utf8Bytes[0] == (byte)'\r' || utf8Bytes[0] == (byte)'\n'))
+                {
+                    utf8Bytes = utf8Bytes.Slice(1);
+                }
+            }
+            else
+            {
+                utf8Bytes = ReadOnlySpan<byte>.Empty;
+            }
+
+            lineBytes = lineBytes.Trim((byte)' ');
+            lineBytes = lineBytes.Trim((byte)'\t');
+            lineBytes = lineBytes.Trim((byte)'\r');
+            lineBytes = lineBytes.Trim((byte)'\n');
+
+            if (lineBytes.IsEmpty)
+            {
+                continue;
+            }
+
+            return Encoding.UTF8.TryGetChars(lineBytes, destination, out charsWritten);
+        }
+
+        charsWritten = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Synchronously reads the first non-empty line of a .strm handle into a stack-allocated or rented buffer with zero heap allocations.
+    /// </summary>
+    public static int ReadStrmLineZeroAlloc(SafeFileHandle handle, Span<byte> byteBuffer, Span<char> charDestination)
     {
-        Timeout = TimeSpan.FromSeconds(3)
-    };
+        var bytesRead = RandomAccess.Read(handle, byteBuffer, 0);
+        if (bytesRead <= 0)
+        {
+            return 0;
+        }
+
+        if (TryExtractFirstStrmLine(byteBuffer.Slice(0, bytesRead), charDestination, out var charsWritten))
+        {
+            return charsWritten;
+        }
+
+        return 0;
+    }
 
     // Lock-free coalescing for concurrent requests on the same .strm file
     private static readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inflightFileReads = new(StringComparer.OrdinalIgnoreCase);
@@ -798,44 +865,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         string? target = null;
         try
         {
-            ReadOnlySpan<byte> span = buffer.AsSpan(0, read);
-
-            // Strip UTF-8 BOM if present (0xEF, 0xBB, 0xBF)
-            if (span.Length >= 3 && span[0] == 0xEF && span[1] == 0xBB && span[2] == 0xBF)
+            Span<char> charBuffer = stackalloc char[4096];
+            if (TryExtractFirstStrmLine(buffer.AsSpan(0, read), charBuffer, out var charsWritten))
             {
-                span = span.Slice(3);
-            }
-
-            while (!span.IsEmpty)
-            {
-                int lineEnd = span.IndexOfAny((byte)'\r', (byte)'\n');
-                ReadOnlySpan<byte> lineBytes = lineEnd >= 0 ? span.Slice(0, lineEnd) : span;
-
-                if (lineEnd >= 0)
-                {
-                    span = span.Slice(lineEnd);
-                    while (!span.IsEmpty && (span[0] == (byte)'\r' || span[0] == (byte)'\n'))
-                    {
-                        span = span.Slice(1);
-                    }
-                }
-                else
-                {
-                    span = ReadOnlySpan<byte>.Empty;
-                }
-
-                lineBytes = lineBytes.Trim((byte)' ');
-                lineBytes = lineBytes.Trim((byte)'\t');
-                lineBytes = lineBytes.Trim((byte)'\r');
-                lineBytes = lineBytes.Trim((byte)'\n');
-
-                if (lineBytes.IsEmpty)
-                {
-                    continue;
-                }
-
-                target = Encoding.UTF8.GetString(lineBytes);
-                break;
+                target = new string(charBuffer.Slice(0, charsWritten));
             }
         }
         finally
@@ -1189,7 +1222,9 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
             else
             {
-                var kind = statusCode == HttpStatusCode.NotFound ? FailureKind.PermanentFailure : FailureKind.TemporaryFailure;
+                var kind = (statusCode == HttpStatusCode.NotFound || statusCode == HttpStatusCode.ServiceUnavailable)
+                    ? FailureKind.PermanentFailure
+                    : FailureKind.TemporaryFailure;
                 return new HttpPreflightResult(false, statusCode, kind);
             }
         }
@@ -1269,9 +1304,10 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Executes auto-heal deletion and *arr replacement for a confirmed dead (404) .strm item.
-    /// Verifies mount health, deletes the local .strm file, removes the item from Jellyfin library,
-    /// and invokes <see cref="OnStrmDeleted"/> to trigger *arr recovery.
+    /// Executes auto-heal deletion and list feed insertion for a confirmed dead (404/503) .strm item.
+    /// Verifies mount health, deletes the local .strm file, extracts TMDB/TVDB provider IDs,
+    /// pushes the item to the native AutoHealService feed, removes the item from the Jellyfin library,
+    /// and refreshes the parent folder so the dead item disappears from the UI immediately.
     /// </summary>
     public async Task AutoHealDeadItemAsync(BaseItem item, CancellationToken ct = default)
     {
@@ -1295,16 +1331,39 @@ public sealed class ProbeService : IHostedService, IDisposable
                 File.Delete(deletedPath);
             }
 
-            // remove from the Jellyfin library without touching disk again (file already deleted above)
+            // Extract TMDB/TVDB provider ID and push to the AutoHealService feed
+            _autoHealService?.AddFromItem(item);
+
+            // Instruct Jellyfin's ILibraryManager to delete the item and refresh the parent folder
+            var parent = item.GetParent();
             _libraryManager.DeleteItem(item, new DeleteOptions { DeleteFileLocation = false });
-            _logger.LogWarning("QuickSTRM: Auto-deleted dead .strm link {Name} ({Path})", item.Name, deletedPath);
 
-            await _telemetryService.LogAutoHealAsync(deletedPath ?? item.Name, item.Name).ConfigureAwait(false);
-
-            if (!string.IsNullOrEmpty(deletedPath) && OnStrmDeleted is not null)
+            if (parent is not null)
             {
-                await OnStrmDeleted.Invoke(deletedPath).ConfigureAwait(false);
+                try
+                {
+                    await parent.RefreshMetadata(new MetadataRefreshOptions(_directoryService), ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "QuickSTRM: Parent metadata refresh skipped for {ParentName}", parent.Name);
+                }
             }
+
+            if (OnStrmDeleted is not null && deletedPath is not null)
+            {
+                try
+                {
+                    await OnStrmDeleted.Invoke(deletedPath).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "QuickSTRM: OnStrmDeleted event handler threw exception");
+                }
+            }
+
+            _logger.LogWarning("QuickSTRM: Auto-deleted dead .strm link {Name} ({Path}) and pushed to Auto-Heal feed", item.Name, deletedPath);
+            await _telemetryService.LogAutoHealAsync(deletedPath ?? item.Name, item.Name).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1362,6 +1421,8 @@ public sealed class ProbeService : IHostedService, IDisposable
                 sweptUrls,
                 sweptFailed);
         }
+
+        _autoHealService?.EvictExpiredEntries();
     }
 
     private async Task MaintenanceLoopAsync(CancellationToken ct)
@@ -2101,7 +2162,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         _resolvedUrlCache.Clear();
 
         // 3) dispose what we own
-        _preflightClient.Dispose();
+        if (!ReferenceEquals(_preflightClient, Plugin.HttpClient))
+        {
+            _preflightClient.Dispose();
+        }
         _probeGate.Dispose();
         _headGate.Dispose();
         _shutdownCts.Dispose();

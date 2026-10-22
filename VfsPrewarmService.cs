@@ -31,10 +31,11 @@ public class VfsPrewarmService : IDisposable
         SlidingExpiration = TimeSpan.FromMinutes(5)
     };
 
-    private const int PrewarmSizeBytes = 5 * 1024 * 1024; // 5 MB
-    private const int TailPrewarmSizeBytes = 1024 * 1024; // 1 MB
+    private const int HardwarePageSize = 4096;
+    private const int PrewarmSizeBytes = 5 * 1024 * 1024; // 5 MB = 1280 hardware pages
+    private const int TailPrewarmSizeBytes = 1024 * 1024; // 1 MB = 256 hardware pages
     private const long TailThresholdBytes = 6L * 1024 * 1024; // 6 MB
-    private const int BufferSize = 81920; // 80 KB
+    private const int BufferSize = 16 * HardwarePageSize; // 64 KB = 16 hardware pages (4096-byte boundary aligned)
 
     private readonly ILibraryManager _libraryManager;
     private readonly IMemoryCache _cache;
@@ -62,13 +63,7 @@ public class VfsPrewarmService : IDisposable
             _ownsCache = true;
         }
 
-        _httpClient = httpClientFactory?.CreateClient("QuickSTRM") ?? new HttpClient(new SocketsHttpHandler
-        {
-            PooledConnectionLifetime = TimeSpan.FromMinutes(5)
-        })
-        {
-            Timeout = TimeSpan.FromSeconds(15)
-        };
+        _httpClient = httpClientFactory?.CreateClient("QuickSTRM") ?? Plugin.HttpClient;
     }
 
     /// <summary>
@@ -402,10 +397,10 @@ public class VfsPrewarmService : IDisposable
                                 FileOptions.None);
 
                             var fileLen = RandomAccess.GetLength(subHandle);
-                            var toRead = (int)Math.Min(64 * 1024, fileLen);
+                            var toRead = (int)Math.Min(16 * HardwarePageSize, fileLen);
                             if (toRead > 0)
                             {
-                                buffer ??= ArrayPool<byte>.Shared.Rent(64 * 1024);
+                                buffer ??= ArrayPool<byte>.Shared.Rent(16 * HardwarePageSize);
                                 _ = await RandomAccess.ReadAsync(subHandle, buffer.AsMemory(0, toRead), 0, ct).ConfigureAwait(false);
                             }
                             _logger.LogDebug("QuickSTRM: Pre-warmed adjacent subtitle: {Path}", file);
@@ -433,7 +428,10 @@ public class VfsPrewarmService : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _httpClient.Dispose();
+        if (!ReferenceEquals(_httpClient, Plugin.HttpClient))
+        {
+            _httpClient.Dispose();
+        }
         if (_ownsCache)
         {
             _cache.Dispose();

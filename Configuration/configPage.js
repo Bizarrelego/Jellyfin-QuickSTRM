@@ -81,31 +81,17 @@
         var chkNextEp = view.querySelector('#chkEnableNextEpisodePreWarm');
         var chkChapters = view.querySelector('#chkSynthesizeVirtualChapters');
         var txtMarker = view.querySelector('#txtMountMarkerFileName');
-        var txtJellyfinUrl = view.querySelector('#txtJellyfinInternalUrl') || view.querySelector('#txtJellyfinBaseUrl');
-        var txtJellyfinInternalUrl = view.querySelector('#txtJellyfinInternalUrl');
-        var txtJellyfinBaseUrl = view.querySelector('#txtJellyfinBaseUrl');
-        var dockerWarning = view.querySelector('#dockerLocalhostWarning');
-        var arrStatusBanner = view.querySelector('#arrConnectionStatusBanner');
         var tabButtons = view.querySelectorAll('.quickstrm-tab-btn');
         var tabContents = view.querySelectorAll('.quickstrm-tab-content');
 
-        // ── 3. *arr Suite DOM references ──
-        var btnSyncArr = view.querySelector('#btnSyncArrWebhooks');
-        var btnWipeArr = view.querySelector('#btnWipeArrWebhooks');
-        var btnShowAddModal = view.querySelector('#btnShowAddArrModal');
-        var arrList = view.querySelector('#arrInstancesList');
-        var addPanel = view.querySelector('#arrAddInstancePanel');
-        var addName = view.querySelector('#addArrName');
-        var addType = view.querySelector('#addArrType');
-        var addBaseUrl = view.querySelector('#addArrBaseUrl');
-        var addApiKey = view.querySelector('#addArrApiKey');
-        var btnToggleApiKey = view.querySelector('#btnToggleApiKeyVisibility');
-        var addPathFrom = view.querySelector('#addArrPathFrom');
-        var addPathTo = view.querySelector('#addArrPathTo');
-        var addAutoHeal = view.querySelector('#chkArrAutoHeal') || view.querySelector('#addArrAutoHeal');
-        var btnSaveAdd = view.querySelector('#btnSaveArrInstance') || view.querySelector('#btnSaveArrConnection');
-        var btnCancelAdd = view.querySelector('#btnCancelArrInstance');
-        var btnTestArr = view.querySelector('#btnTestArrConnection');
+        // ── 3. Native Auto-Heal Feed DOM references ──
+        var txtRadarrFeedUrl = view.querySelector('#txtRadarrFeedUrl');
+        var txtSonarrFeedUrl = view.querySelector('#txtSonarrFeedUrl');
+        var btnCopyRadarrUrl = view.querySelector('#btnCopyRadarrUrl');
+        var btnCopySonarrUrl = view.querySelector('#btnCopySonarrUrl');
+        var btnRefreshAutoHealFeeds = view.querySelector('#btnRefreshAutoHealFeeds');
+        var lblAutoHealRadarrCount = view.querySelector('#lblAutoHealRadarrCount');
+        var lblAutoHealSonarrCount = view.querySelector('#lblAutoHealSonarrCount');
 
         // ── 4. STRM Tools DOM references ──
         var txtRewriteOldPrefix = view.querySelector('#txtRewriteOldPrefix');
@@ -124,104 +110,65 @@
         var btnStart = view.querySelector('#btnStartProbe');
         var btnStop = view.querySelector('#btnStopProbe');
         var btnResetFailureCache = view.querySelector('#btnResetFailureCache');
-    var lblStatus = view.querySelector('#probeStatusText') || view.querySelector('#lblTaskStatus');
-    var progressBar = view.querySelector('#probeProgressBar') || view.querySelector('.taskProgressInner');
-    var probeItemText = view.querySelector('#probeItemText');
-    var lblCurrentItem = view.querySelector('#lblCurrentItem');
-    var recentActionsList = view.querySelector('#recentActionsList');
-    var btnRefreshLedger = view.querySelector('#btnRefreshLedger');
-    var btnClearLedger = view.querySelector('#btnClearLedger');
+        var lblStatus = view.querySelector('#probeStatusText') || view.querySelector('#lblTaskStatus');
+        var progressBar = view.querySelector('#probeProgressBar') || view.querySelector('.taskProgressInner');
+        var probeItemText = view.querySelector('#probeItemText');
+        var lblCurrentItem = view.querySelector('#lblCurrentItem');
+        var recentActionsList = view.querySelector('#recentActionsList');
+        var btnRefreshLedger = view.querySelector('#btnRefreshLedger');
+        var btnClearLedger = view.querySelector('#btnClearLedger');
 
-    var pollTimer = null;
-    var queuePollTimer = null;
-    var countdownTimer = null;
-    var cooldownEndsAt = 0;
-    var circuitState = 'Closed';
+        var pollTimer = null;
+        var queuePollTimer = null;
+        var countdownTimer = null;
+        var cooldownEndsAt = 0;
+        var circuitState = 'Closed';
 
-    // ── Utility Functions ──
+        // ── Utility Functions ──
 
-    function escapeHtml(str) {
-        if (!str) { return ''; }
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
-    }
-
-    function extractErrorMessage(err) {
-        if (!err) {
-            return 'Unknown error occurred.';
-        }
-        if (typeof err === 'string') {
-            return err;
-        }
-        if (err.message) {
-            return err.message;
-        }
-        if (err.statusText) {
-            return err.statusText + (err.status ? ' (' + err.status + ')' : '');
-        }
-        if (err.status) {
-            return 'HTTP error ' + err.status;
-        }
-        try {
-            return JSON.stringify(err);
-        } catch (e) {
-            return String(err);
-        }
-    }
-
-    function autoFormatUrlInput(input) {
-        if (!input) { return; }
-        var val = (input.value || '').trim();
-        if (!val) { return; }
-        if (!/^https?:\/\//i.test(val)) {
-            val = 'http://' + val;
-        }
-        val = val.replace(/\/+$/, '');
-        input.value = val;
-    }
-
-    function showDrawerFeedback(isSuccess, message) {
-        if (!arrStatusBanner) { return; }
-        arrStatusBanner.className = 'quickstrm-inline-feedback ' + (isSuccess ? 'success' : 'error');
-        var icon = isSuccess ? 'check_circle' : 'error';
-        var iconColor = isSuccess ? '#81c784' : '#ef5350';
-        arrStatusBanner.innerHTML = '<span class="material-icons" style="color: ' + iconColor + '; font-size: 1.2em;">' + icon + '</span>' +
-            '<div style="word-break: break-word;">' + escapeHtml(message) + '</div>';
-        arrStatusBanner.style.display = 'flex';
-    }
-
-    function hideDrawerFeedback() {
-        if (arrStatusBanner) {
-            arrStatusBanner.style.display = 'none';
-        }
-    }
-
-    function checkDockerLocalhostWarning(instances) {
-        if (!dockerWarning) { return; }
-        var jfUrl = txtJellyfinUrl ? txtJellyfinUrl.value.trim().toLowerCase() : '';
-        var isLocalhost = jfUrl.indexOf('localhost') !== -1 || jfUrl.indexOf('127.0.0.1') !== -1;
-        if (!isLocalhost) {
-            dockerWarning.style.display = 'none';
-            return;
+        function escapeHtml(str) {
+            if (!str) { return ''; }
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
         }
 
-        var hasDockerHostname = false;
-        if (Array.isArray(instances)) {
-            for (var i = 0; i < instances.length; i++) {
-                var instUrl = instances[i] && instances[i].BaseUrl ? instances[i].BaseUrl.toLowerCase() : '';
-                if (instUrl && instUrl.indexOf('localhost') === -1 && instUrl.indexOf('127.0.0.1') === -1) {
-                    hasDockerHostname = true;
-                    break;
-                }
+        function extractErrorMessage(err) {
+            if (!err) {
+                return 'Unknown error occurred.';
+            }
+            if (typeof err === 'string') {
+                return err;
+            }
+            if (err.message) {
+                return err.message;
+            }
+            if (err.statusText) {
+                return err.statusText + (err.status ? ' (' + err.status + ')' : '');
+            }
+            if (err.status) {
+                return 'HTTP error ' + err.status;
+            }
+            try {
+                return JSON.stringify(err);
+            } catch (e) {
+                return String(err);
             }
         }
 
-        dockerWarning.style.display = hasDockerHostname ? 'flex' : 'none';
-    }
+        function autoFormatUrlInput(input) {
+            if (!input) { return; }
+            var val = (input.value || '').trim();
+            if (!val) { return; }
+            if (!/^https?:\/\//i.test(val)) {
+                val = 'http://' + val;
+            }
+            val = val.replace(/\/+$/, '');
+            input.value = val;
+        }
 
     function initTabs() {
         var activeBtn = view.querySelector('.quickstrm-tab-btn.active') || view.querySelector('.quickstrm-tab-btn');
@@ -250,7 +197,7 @@
             loadQueue();
             loadLedger();
         } else if (targetTabId === 'tab-arr') {
-            loadConfig();
+            loadAutoHealStatus();
         }
     };
 
@@ -669,315 +616,82 @@
         });
     }
 
-    // ── *arr Suite Rendering ──
+    // ── Native Auto-Heal Feed Functions ──
 
-    function renderArrInstances(instances, defaultUnsyncedText) {
-        if (!arrList) { return; }
-        checkDockerLocalhostWarning(instances);
-
-        if (!instances || instances.length === 0) {
-            arrList.innerHTML = '<div style="color: var(--text-muted-color, #777); font-size: 0.9em; padding: 1em 0;">No *arr instances configured. Click "+ Add Instance" above to connect.</div>';
-            return;
+    function getFeedBaseUrl() {
+        var base = window.location.origin;
+        if (window.ApiClient && typeof ApiClient.serverAddress === 'function' && ApiClient.serverAddress()) {
+            base = ApiClient.serverAddress().replace(/\/+$/, '');
         }
-
-        var unsyncedLabel = defaultUnsyncedText || 'Not Synced';
-        var html = '';
-
-        instances.forEach(function (inst, index) {
-            var isSynced = inst.ProvisionedWebhookId != null && inst.ProvisionedWebhookId > 0;
-            var arrType = inst.ArrType || 'Radarr';
-            var typeBadgeClass = 'quickstrm-badge-radarr';
-            if (arrType.toLowerCase() === 'sonarr') {
-                typeBadgeClass = 'quickstrm-badge-sonarr';
-            } else if (arrType.toLowerCase() === 'whisparr') {
-                typeBadgeClass = 'quickstrm-badge-whisparr';
-            }
-
-            var statusBadge;
-            if (isSynced) {
-                statusBadge = '<span class="quickstrm-badge quickstrm-badge-green sync-status synced">SYNCED #' + escapeHtml(inst.ProvisionedWebhookId) + '</span>';
-            } else if (inst.LastSyncError && inst.LastSyncError.trim().length > 0) {
-                statusBadge = '<span class="quickstrm-badge quickstrm-badge-red sync-status unsynced">SYNC FAILED</span>';
-            } else {
-                statusBadge = '<span class="quickstrm-badge quickstrm-badge-red sync-status unsynced">' + escapeHtml(unsyncedLabel) + '</span>';
-            }
-
-            var healBadge = inst.AutoHealOn404
-                ? '<span class="quickstrm-badge quickstrm-badge-green">AUTO-HEAL</span>'
-                : '<span class="quickstrm-badge" style="background: rgba(255,255,255,0.06); color: #888;">AUTO-HEAL OFF</span>';
-
-            var hasPathFrom = !!(inst.PathFrom && inst.PathFrom.trim());
-            var hasPathTo = !!(inst.PathTo && inst.PathTo.trim());
-            var pathMappingLabel;
-            if (!hasPathFrom && !hasPathTo) {
-                pathMappingLabel = 'Direct (Shared Mount)';
-            } else {
-                pathMappingLabel = (inst.PathFrom || '(none)') + ' \u2192 ' + (inst.PathTo || '(none)');
-            }
-
-            var syncTimeStr = '';
-            if (inst.LastSyncUtc) {
-                try {
-                    syncTimeStr = '<span style="font-size: 0.8em; opacity: 0.6; margin-left: 0.4em;">Synced: ' + new Date(inst.LastSyncUtc).toLocaleTimeString() + '</span>';
-                } catch (e) {
-                }
-            }
-
-            var errorBox = '';
-            if (inst.LastSyncError && inst.LastSyncError.trim().length > 0) {
-                var hint = '';
-                var errLower = inst.LastSyncError.toLowerCase();
-                if (errLower.indexOf('could not reach') !== -1 || errLower.indexOf('refused') !== -1 || errLower.indexOf('network') !== -1 || errLower.indexOf('localhost') !== -1) {
-                    hint = '<div style="margin-top: 0.35em; font-size: 0.82em; opacity: 0.85;">Tip: Verify container network or host port accessibility.</div>';
-                }
-                errorBox = '<div class="quickstrm-card-error-callout">' +
-                    '<div style="font-weight: 600; display: flex; align-items: center; gap: 0.4em; margin-bottom: 0.2em;">' +
-                        '<span class="material-icons" style="font-size: 16px; color: #ef5350;">error_outline</span>' +
-                        '<span>Sync Error:</span>' +
-                    '</div>' +
-                    '<div style="word-break: break-word;">' + escapeHtml(inst.LastSyncError) + '</div>' +
-                    hint +
-                '</div>';
-            }
-
-            html += '<div class="quickstrm-arr-card" data-index="' + index + '">' +
-                '<div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.8em;" class="quickstrm-card-header">' +
-                    '<div style="flex: 1; min-width: 260px;">' +
-                        '<div style="display: flex; align-items: center; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.4em;">' +
-                            '<span style="font-weight: 600; font-size: 1.1em; color: var(--text-color, #fff);">' + escapeHtml(inst.Name || 'Unnamed') + '</span>' +
-                            '<span class="quickstrm-badge ' + typeBadgeClass + '">' + escapeHtml(arrType) + '</span>' +
-                            statusBadge +
-                            healBadge +
-                            syncTimeStr +
-                        '</div>' +
-                        '<div style="font-size: 0.84em; color: var(--text-muted-color, #888); word-break: break-all;">' +
-                            '<span>' + escapeHtml(inst.BaseUrl || '') + '</span>' +
-                            '<span style="margin: 0 0.5em; opacity: 0.5;">|</span>' +
-                            '<span>Path: ' + escapeHtml(pathMappingLabel) + '</span>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div style="display: flex; gap: 0.5em; align-items: center;" class="quickstrm-card-actions">' +
-                        '<button is="emby-button" type="button" class="btnSyncCard raised emby-button" data-index="' + index + '" style="padding: 0.4em 0.85em; font-size: 0.85em; margin: 0;">' +
-                            '<span>Sync / Test</span>' +
-                        '</button>' +
-                        '<button is="emby-button" type="button" class="btnEditInstance raised emby-button" data-index="' + index + '" style="padding: 0.4em 0.85em; font-size: 0.85em; margin: 0;">' +
-                            '<span>Edit</span>' +
-                        '</button>' +
-                        '<button is="emby-button" type="button" class="btnDeleteInstance btn-remove-arr raised emby-button" data-index="' + index + '" style="background: #b71c1c; color: white; padding: 0.4em 0.85em; font-size: 0.85em; margin: 0;">' +
-                            '<span>Remove</span>' +
-                        '</button>' +
-                    '</div>' +
-                '</div>' +
-                errorBox +
-            '</div>';
-        });
-
-        arrList.innerHTML = html;
-
-        // Wire Sync / Test buttons
-        var syncBtns = arrList.querySelectorAll('.btnSyncCard');
-        syncBtns.forEach(function (btn) {
-            btn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                var idx = parseInt(btn.getAttribute('data-index'), 10);
-                var span = btn.querySelector('span');
-                var origText = span ? span.innerHTML : btn.innerHTML;
-                if (span) {
-                    span.innerHTML = '<span class="quickstrm-spinner"></span>Syncing...';
-                }
-                btn.disabled = true;
-
-                apiPost('QuickStrm/Arr/SyncInstance/' + idx)
-                    .then(function (res) {
-                        btn.disabled = false;
-                        if (span) { span.innerHTML = origText; }
-                        loadConfig();
-                        var isOk = res && (res.Success || res.success);
-                        var msg = (res && (res.Message || res.message)) || (isOk ? 'Sync successful.' : 'Sync failed.');
-                        if (!isOk) {
-                            showAlert('Sync Failed: ' + msg);
-                        }
-                    })
-                    .catch(function (err) {
-                        btn.disabled = false;
-                        if (span) { span.innerHTML = origText; }
-                        showAlert('Sync Error: ' + extractErrorMessage(err));
-                        loadConfig();
-                    });
-            });
-        });
-
-        // Wire Edit buttons
-        var editBtns = arrList.querySelectorAll('.btnEditInstance');
-        editBtns.forEach(function (btn) {
-            btn.addEventListener('click', function (e) {
-                var target = e.currentTarget || btn;
-                editingInstanceIndex = target.dataset.index;
-                hideDrawerFeedback();
-
-                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                    var inst = config && config.ArrInstances ? config.ArrInstances[editingInstanceIndex] : null;
-                    if (!inst) { return; }
-
-                    if (addName) { addName.value = inst.Name || ''; }
-                    if (addType) { addType.value = inst.ArrType || 'Radarr'; }
-                    if (addBaseUrl) { addBaseUrl.value = inst.BaseUrl || ''; }
-                    if (addApiKey) {
-                        addApiKey.value = inst.ApiKey || '';
-                        addApiKey.type = 'password';
-                    }
-                    if (btnToggleApiKey) {
-                        var toggleSpan = btnToggleApiKey.querySelector('span');
-                        if (toggleSpan) { toggleSpan.textContent = 'Show'; } else { btnToggleApiKey.textContent = 'Show'; }
-                    }
-                    if (addPathFrom) { addPathFrom.value = inst.PathFrom || ''; }
-                    if (addPathTo) { addPathTo.value = inst.PathTo || ''; }
-                    if (addAutoHeal) { addAutoHeal.checked = inst.AutoHealOn404 !== false; }
-
-                    if (addPanel) {
-                        addPanel.style.display = 'block';
-                    }
-
-                    var arrPanelTitle = view.querySelector('#arrPanelTitle');
-                    if (arrPanelTitle) {
-                        arrPanelTitle.innerHTML = '<span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">edit</span> Edit *arr Connection';
-                    }
-
-                    if (btnSaveAdd) {
-                        var span = btnSaveAdd.querySelector('span');
-                        if (span) {
-                            span.textContent = 'Update Connection';
-                        } else {
-                            btnSaveAdd.textContent = 'Update Connection';
-                        }
-                    }
-
-                    if (addPanel && typeof addPanel.scrollIntoView === 'function') {
-                        addPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }
-                });
-            });
-        });
-
-        // Wire Remove buttons (2-click confirmation pattern without window.confirm)
-        var removeBtns = arrList.querySelectorAll('.btnDeleteInstance, .btn-remove-arr');
-        removeBtns.forEach(function (btn) {
-            btn.addEventListener('click', function (event) {
-                event.preventDefault();
-                event.stopPropagation();
-                var idx = parseInt(btn.getAttribute('data-index'), 10);
-
-                if (btn.dataset.confirming === 'true') {
-                    if (btn._confirmTimeout) {
-                        clearTimeout(btn._confirmTimeout);
-                        btn._confirmTimeout = null;
-                    }
-                    btn.disabled = true;
-                    btn.innerHTML = '<span class="quickstrm-spinner"></span> Deleting...';
-
-                    apiPost('QuickStrm/Arr/Instance/' + idx + '/Delete')
-                        .then(function (res) {
-                            if (res && res.Instances) {
-                                if (view._qsState) {
-                                    if (!view._qsState.currentConfig) {
-                                        view._qsState.currentConfig = {};
-                                    }
-                                    view._qsState.currentConfig.ArrInstances = res.Instances;
-                                }
-                                renderArrInstances(res.Instances);
-                            } else {
-                                loadConfig();
-                            }
-                        })
-                        .catch(function (err) {
-                            showAlert('Failed to remove connection: ' + extractErrorMessage(err));
-                            loadConfig();
-                        });
-                } else {
-                    btn.dataset.confirming = 'true';
-                    var origHtml = btn.innerHTML;
-                    var origBg = btn.style.background;
-                    btn.style.background = '#f44336';
-                    btn.style.color = '#ffffff';
-                    btn.innerHTML = '<span>Confirm Delete?</span>';
-
-                    btn._confirmTimeout = setTimeout(function () {
-                        btn.dataset.confirming = 'false';
-                        btn.style.background = origBg || '#b71c1c';
-                        btn.innerHTML = origHtml;
-                        btn._confirmTimeout = null;
-                    }, 4000);
-                }
-            });
-        });
+        return base;
     }
 
-    function updateBadgesFromResults(results) {
-        if (!Array.isArray(results) || !arrList) { return; }
-        var cards = arrList.querySelectorAll('.quickstrm-arr-card');
-        cards.forEach(function (card, index) {
-            var badge = card.querySelector('.sync-status');
-            if (!badge) { return; }
-            var res = results[index];
-            if (res && (res.Success || res.success) && (res.WebhookId || res.webhookId)) {
-                badge.className = 'badge sync-status synced quickstrm-badge quickstrm-badge-green';
-                badge.textContent = 'Synced';
-            } else {
-                badge.className = 'badge sync-status unsynced quickstrm-badge quickstrm-badge-red';
-                badge.textContent = 'Unsynced/Error';
-            }
-        });
-    }
+    function loadAutoHealStatus() {
+        var base = getFeedBaseUrl();
+        var radarrUrl = base + '/QuickStrm/AutoHeal/Radarr';
+        var sonarrUrl = base + '/QuickStrm/AutoHeal/Sonarr';
 
-    function forceBadgesUnsynced() {
-        if (!arrList) { return; }
-        var badges = arrList.querySelectorAll('.sync-status');
-        badges.forEach(function (badge) {
-            badge.className = 'badge sync-status unsynced quickstrm-badge quickstrm-badge-red';
-            badge.textContent = 'Unsynced';
-        });
-    }
+        if (txtRadarrFeedUrl) { txtRadarrFeedUrl.value = radarrUrl; }
+        if (txtSonarrFeedUrl) { txtSonarrFeedUrl.value = sonarrUrl; }
 
-    function removeArrInstance(index) {
-        showLoading();
-        apiPost('QuickStrm/Arr/Instance/' + index + '/Delete')
+        return apiGet('QuickStrm/AutoHeal/Summary')
             .then(function (res) {
-                hideLoading();
-                if (res && res.Instances) {
-                    if (view._qsState) {
-                        if (!view._qsState.currentConfig) {
-                            view._qsState.currentConfig = {};
-                        }
-                        view._qsState.currentConfig.ArrInstances = res.Instances;
-                    }
-                    renderArrInstances(res.Instances);
-                } else {
-                    loadConfig();
+                if (lblAutoHealRadarrCount) {
+                    lblAutoHealRadarrCount.textContent = (res && res.RadarrCount != null) ? res.RadarrCount : '0';
+                }
+                if (lblAutoHealSonarrCount) {
+                    lblAutoHealSonarrCount.textContent = (res && res.SonarrCount != null) ? res.SonarrCount : '0';
                 }
             })
-            .catch(function (err) {
-                hideLoading();
-                showAlert('Failed to remove connection: ' + extractErrorMessage(err));
-                loadConfig();
+            .catch(function () {
+                // Keep existing display if endpoint temporarily unavailable
             });
     }
 
-    function clearAddForm() {
-        if (addName) { addName.value = ''; }
-        if (addType) { addType.value = 'Radarr'; }
-        if (addBaseUrl) { addBaseUrl.value = ''; }
-        if (addApiKey) {
-            addApiKey.value = '';
-            addApiKey.type = 'password';
-        }
-        if (btnToggleApiKey) {
-            var toggleSpan = btnToggleApiKey.querySelector('span');
-            if (toggleSpan) { toggleSpan.textContent = 'Show'; } else { btnToggleApiKey.textContent = 'Show'; }
-        }
-        if (addPathFrom) { addPathFrom.value = ''; }
-        if (addPathTo) { addPathTo.value = ''; }
-        if (addAutoHeal) { addAutoHeal.checked = true; }
+    function showCopyFeedback(btn) {
+        var span = btn.querySelector('span:last-child') || btn;
+        var orig = span.textContent;
+        span.textContent = 'Copied!';
+        btn.style.background = '#4caf50';
+        btn.style.color = '#fff';
+        setTimeout(function () {
+            span.textContent = orig;
+            btn.style.background = '';
+            btn.style.color = '';
+        }, 2000);
+    }
+
+    function wireFeedCopyButton(btn, inputEl) {
+        if (!btn || !inputEl) { return; }
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            var text = inputEl.value;
+            if (!text) { return; }
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text)
+                    .then(function () { showCopyFeedback(btn); })
+                    .catch(function () {
+                        inputEl.select();
+                        document.execCommand('copy');
+                        showCopyFeedback(btn);
+                    });
+            } else {
+                inputEl.select();
+                document.execCommand('copy');
+                showCopyFeedback(btn);
+            }
+        });
+    }
+
+    wireFeedCopyButton(btnCopyRadarrUrl, txtRadarrFeedUrl);
+    wireFeedCopyButton(btnCopySonarrUrl, txtSonarrFeedUrl);
+
+    if (btnRefreshAutoHealFeeds) {
+        btnRefreshAutoHealFeeds.addEventListener('click', function (e) {
+            e.preventDefault();
+            loadAutoHealStatus();
+        });
     }
 
     function saveFullConfig(viewEl, silent) {
@@ -988,7 +702,6 @@
             var chkNextEp = v.querySelector('#chkEnableNextEpisodePreWarm');
             var chkChapters = v.querySelector('#chkSynthesizeVirtualChapters');
             var txtMarker = v.querySelector('#txtMountMarkerFileName');
-            var txtJellyfinUrl = v.querySelector('#txtJellyfinInternalUrl') || v.querySelector('#txtJellyfinBaseUrl');
 
             if (chkSweeper) {
                 config.EnableAutoProbe = chkSweeper.checked;
@@ -1005,9 +718,6 @@
             if (txtMarker) {
                 config.MountMarkerFileName = txtMarker.value.trim();
             }
-            if (txtJellyfinUrl) {
-                config.JellyfinBaseUrl = txtJellyfinUrl.value.trim();
-            }
 
             if (v._qsState) {
                 v._qsState.currentConfig = config;
@@ -1022,7 +732,7 @@
         });
     }
 
-    function loadConfig(defaultUnsyncedText) {
+    function loadConfig() {
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             if (view._qsState) {
                 view._qsState.currentConfig = config;
@@ -1033,18 +743,13 @@
             var chkNextEp = view.querySelector('#chkEnableNextEpisodePreWarm');
             var chkChapters = view.querySelector('#chkSynthesizeVirtualChapters');
             var txtMarker = view.querySelector('#txtMountMarkerFileName');
-            var txtJellyfinUrl = view.querySelector('#txtJellyfinInternalUrl') || view.querySelector('#txtJellyfinBaseUrl');
 
             if (chkSweeper) { chkSweeper.checked = !!config.EnableAutoProbe; }
             if (chkAutoHeal) { chkAutoHeal.checked = !!config.EnableAutoDelete; }
             if (chkNextEp) { chkNextEp.checked = config.EnableNextEpisodePreWarm !== false; }
             if (chkChapters) { chkChapters.checked = config.SynthesizeVirtualChapters !== false; }
             if (txtMarker) { txtMarker.value = config.MountMarkerFileName || ''; }
-            if (txtJellyfinUrl) { txtJellyfinUrl.value = config.JellyfinBaseUrl || ''; }
-            if (txtJellyfinBaseUrl) { txtJellyfinBaseUrl.value = config.JellyfinBaseUrl || ''; }
 
-            renderArrInstances(config.ArrInstances || [], defaultUnsyncedText);
-            checkDockerLocalhostWarning(config.ArrInstances || []);
             return config;
         });
     }
@@ -1128,264 +833,7 @@
         });
     }
 
-    // 2. Add *arr Instance Modal / Controls
-    if (btnShowAddModal) {
-        btnShowAddModal.addEventListener('click', function () {
-            clearAddForm();
-            editingInstanceIndex = -1;
-            if (btnSaveAdd) {
-                var span = btnSaveAdd.querySelector('span');
-                if (span) {
-                    span.textContent = 'Save Connection';
-                } else {
-                    btnSaveAdd.textContent = 'Save Connection';
-                }
-            }
-            var arrPanelTitle = view.querySelector('#arrPanelTitle');
-            if (arrPanelTitle) {
-                arrPanelTitle.innerHTML = '<span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span> Add *arr Connection';
-            }
-            if (addPanel) {
-                addPanel.style.display = addPanel.style.display === 'none' ? 'block' : 'none';
-            }
-        });
-    }
-
-    if (btnCancelAdd) {
-        btnCancelAdd.addEventListener('click', function () {
-            if (addPanel) {
-                addPanel.style.display = 'none';
-            }
-            clearAddForm();
-            if (btnSaveAdd) {
-                var span = btnSaveAdd.querySelector('span');
-                if (span) {
-                    span.textContent = 'Save Connection';
-                } else {
-                    btnSaveAdd.textContent = 'Save Connection';
-                }
-            }
-            var arrPanelTitle = view.querySelector('#arrPanelTitle');
-            if (arrPanelTitle) {
-                arrPanelTitle.innerHTML = '<span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span> Add *arr Connection';
-            }
-            editingInstanceIndex = -1;
-        });
-    }
-
-    if (btnTestArr) {
-        btnTestArr.addEventListener('click', function (e) {
-            if (e) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
-            hideDrawerFeedback();
-            autoFormatUrlInput(addBaseUrl);
-            var type = addType ? addType.value : 'Radarr';
-            var baseUrl = addBaseUrl ? addBaseUrl.value.trim() : '';
-            var apiKey = addApiKey ? addApiKey.value.trim() : '';
-
-            if (!baseUrl || !apiKey) {
-                showDrawerFeedback(false, 'Base URL and API Key are required.');
-                return;
-            }
-
-            var btnSpan = btnTestArr.querySelector('span');
-            var origBtnText = btnSpan ? btnSpan.innerHTML : btnTestArr.innerHTML;
-            if (btnSpan) {
-                btnSpan.innerHTML = '<span class="quickstrm-btn-spinner"></span> Testing...';
-            } else {
-                btnTestArr.innerHTML = '<span class="quickstrm-btn-spinner"></span> Testing...';
-            }
-            btnTestArr.disabled = true;
-
-            var payload = {
-                ArrType: type,
-                BaseUrl: baseUrl,
-                ApiKey: apiKey
-            };
-
-            apiPost('QuickStrm/Arr/TestConnection', payload)
-                .then(function (result) {
-                    btnTestArr.disabled = false;
-                    if (btnSpan) { btnSpan.innerHTML = origBtnText; } else { btnTestArr.innerHTML = origBtnText; }
-
-                    var isSuccess = result && (result.Success === true || result.success === true);
-                    var msg = (result && (result.Message || result.message)) || (isSuccess ? 'Connection to ' + type + ' successful.' : 'Connection failed.');
-                    showDrawerFeedback(isSuccess, msg);
-                })
-                .catch(function (err) {
-                    btnTestArr.disabled = false;
-                    if (btnSpan) { btnSpan.innerHTML = origBtnText; } else { btnTestArr.innerHTML = origBtnText; }
-                    showDrawerFeedback(false, extractErrorMessage(err));
-                });
-        });
-    }
-
-    if (btnSaveAdd) {
-        btnSaveAdd.addEventListener('click', function (e) {
-            if (e) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
-            hideDrawerFeedback();
-            autoFormatUrlInput(addBaseUrl);
-
-            var name = addName ? addName.value.trim() : '';
-            var type = addType ? addType.value : 'Radarr';
-            var baseUrl = addBaseUrl ? addBaseUrl.value.trim() : '';
-            var apiKey = addApiKey ? addApiKey.value.trim() : '';
-            var pathFrom = addPathFrom ? addPathFrom.value.trim() : '';
-            var pathTo = addPathTo ? addPathTo.value.trim() : '';
-            var autoHeal = addAutoHeal ? addAutoHeal.checked : true;
-
-            if (!name || !baseUrl || !apiKey) {
-                showDrawerFeedback(false, 'Please specify Instance Name, Base URL, and API Key.');
-                return;
-            }
-
-            var btnSaveSpan = btnSaveAdd.querySelector('span');
-            var origSaveText = btnSaveSpan ? btnSaveSpan.innerHTML : btnSaveAdd.innerHTML;
-            if (btnSaveSpan) {
-                btnSaveSpan.innerHTML = '<span class="quickstrm-btn-spinner"></span> Saving...';
-            } else {
-                btnSaveAdd.innerHTML = '<span class="quickstrm-btn-spinner"></span> Saving...';
-            }
-            btnSaveAdd.disabled = true;
-            showLoading();
-
-            ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                config.ArrInstances = config.ArrInstances || [];
-
-                var existingWebhookId = (editingInstanceIndex >= 0 && config.ArrInstances[editingInstanceIndex])
-                    ? config.ArrInstances[editingInstanceIndex].ProvisionedWebhookId
-                    : null;
-
-                var newConfig = {
-                    Name: name,
-                    ArrType: type,
-                    BaseUrl: baseUrl,
-                    ApiKey: apiKey,
-                    PathFrom: pathFrom,
-                    PathTo: pathTo,
-                    AutoHealOn404: autoHeal,
-                    ProvisionedWebhookId: existingWebhookId
-                };
-
-                if (editingInstanceIndex >= 0) {
-                    config.ArrInstances[editingInstanceIndex] = newConfig;
-                } else {
-                    config.ArrInstances.push(newConfig);
-                }
-
-                if (txtJellyfinUrl && txtJellyfinUrl.value.trim()) {
-                    config.JellyfinBaseUrl = txtJellyfinUrl.value.trim();
-                }
-
-                return ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
-                    return apiPost('QuickStrm/Arr/TestAndSync');
-                });
-            }).then(function (syncResults) {
-                btnSaveAdd.disabled = false;
-                if (btnSaveSpan) { btnSaveSpan.innerHTML = origSaveText; } else { btnSaveAdd.innerHTML = origSaveText; }
-                clearAddForm();
-                hideDrawerFeedback();
-                editingInstanceIndex = -1;
-
-                if (addPanel) {
-                    addPanel.style.display = 'none';
-                }
-
-                return ApiClient.getPluginConfiguration(pluginId).then(function (freshConfig) {
-                    renderArrInstances(freshConfig.ArrInstances || []);
-                    hideLoading();
-                });
-            }).catch(function (err) {
-                btnSaveAdd.disabled = false;
-                if (btnSaveSpan) { btnSaveSpan.innerHTML = origSaveText; } else { btnSaveAdd.innerHTML = origSaveText; }
-                hideLoading();
-                showDrawerFeedback(false, 'Failed to save connection: ' + extractErrorMessage(err));
-                loadConfig();
-            });
-        });
-    }
-
-    // 3. *arr Sync & Wipe Webhook Buttons
-    if (btnSyncArr) {
-        btnSyncArr.addEventListener('click', function () {
-            btnSyncArr.disabled = true;
-            showLoading();
-
-            apiPost('QuickStrm/Arr/TestAndSync')
-                .then(function (results) {
-                    btnSyncArr.disabled = false;
-                    hideLoading();
-
-                    var failures = [];
-                    var items = [];
-                    if (results && Array.isArray(results.Results)) {
-                        items = results.Results;
-                    } else if (Array.isArray(results)) {
-                        items = results;
-                    }
-
-                    items.forEach(function (r) {
-                        var ok = r.Success || r.success || r.Synced || r.synced;
-                        if (!ok) {
-                            var name = r.InstanceName || r.instanceName || r.Name || r.name || 'Instance';
-                            var msg = r.LastSyncError || r.lastSyncError || r.Message || r.message || 'Sync failed';
-                            failures.push(name + ': ' + msg);
-                        }
-                    });
-
-                    loadConfig();
-
-                    if (failures.length > 0) {
-                        var errorMsg = 'Webhook synchronization failed for:\n' + failures.join('\n');
-                        showAlert(errorMsg);
-                    } else {
-                        showAlert('All *arr instances successfully synchronized!');
-                    }
-                })
-                .catch(function (err) {
-                    btnSyncArr.disabled = false;
-                    hideLoading();
-                    var errMsg = extractErrorMessage(err);
-                    showAlert('Error syncing webhooks: ' + errMsg);
-                    loadConfig();
-                });
-        });
-    }
-
-    if (btnWipeArr) {
-        btnWipeArr.addEventListener('click', function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-
-            Dashboard.confirm("Are you sure?").then(async function (result) {
-                if (result) {
-                    btnWipeArr.disabled = true;
-                    Dashboard.showLoadingMsg();
-                    try {
-                        await ApiClient.fetch({
-                            url: ApiClient.getUrl('QuickStrm/Arr/WipeWebhooks'),
-                            type: 'POST',
-                            dataType: 'json',
-                            contentType: 'application/json'
-                        });
-                    } catch (err) {
-                        Dashboard.alert({ message: 'Error wiping webhooks: ' + extractErrorMessage(err) });
-                    }
-                    Dashboard.hideLoadingMsg();
-                    btnWipeArr.disabled = false;
-                    forceBadgesUnsynced();
-                    await loadConfig('Unsynced');
-                }
-            });
-        });
-    }
-
-    // 4. STRM Bulk URL Rewriter
+    // 2. STRM Bulk URL Rewriter
     if (btnRunRewrite) {
         btnRunRewrite.addEventListener('click', function (event) {
             if (event) {
@@ -1601,20 +1049,6 @@
         });
     }
 
-    if (btnToggleApiKey && addApiKey) {
-        btnToggleApiKey.addEventListener('click', function () {
-            if (addApiKey.type === 'password') {
-                addApiKey.type = 'text';
-                var span = btnToggleApiKey.querySelector('span');
-                if (span) { span.textContent = 'Hide'; } else { btnToggleApiKey.textContent = 'Hide'; }
-            } else {
-                addApiKey.type = 'password';
-                var span = btnToggleApiKey.querySelector('span');
-                if (span) { span.textContent = 'Show'; } else { btnToggleApiKey.textContent = 'Show'; }
-            }
-        });
-    }
-
     if (btnRefreshLedger) {
         btnRefreshLedger.addEventListener('click', function () {
             loadLedger();
@@ -1638,24 +1072,12 @@
         });
     }
 
-    // Auto-format URLs on blur and live docker warning checks
-    [addBaseUrl, txtJellyfinUrl, txtRewriteOldPrefix, txtRewriteNewPrefix].forEach(function (input) {
+    // Auto-format URLs on blur
+    [txtRewriteOldPrefix, txtRewriteNewPrefix].forEach(function (input) {
         if (!input) { return; }
         input.addEventListener('blur', function () {
             autoFormatUrlInput(input);
-            if (input === txtJellyfinUrl) {
-                ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
-                    checkDockerLocalhostWarning(cfg && cfg.ArrInstances ? cfg.ArrInstances : []);
-                });
-            }
         });
-        if (input === txtJellyfinUrl) {
-            input.addEventListener('input', function () {
-                ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
-                    checkDockerLocalhostWarning(cfg && cfg.ArrInstances ? cfg.ArrInstances : []);
-                });
-            });
-        }
     });
 
     // ── Page Lifecycle ──
@@ -1666,6 +1088,7 @@
         loadStatus();
         loadQueue();
         loadConfig();
+        loadAutoHealStatus();
         loadLedger();
     };
 

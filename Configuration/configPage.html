@@ -289,10 +289,10 @@
                     <h2 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">bolt</span>
                         QuickSTRM Management Suite
-                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v3.2.0</span>
+                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v4.1.0</span>
                     </h2>
                     <div style="font-size: 0.9em; color: var(--text-muted-color, #888); margin-top: 0.2em;">
-                        Zero-Touch Playback Acceleration, *arr Orchestration &amp; Library Telemetry
+                        Zero-Touch Playback Acceleration, Auto-Heal List Feeds &amp; Library Telemetry
                     </div>
                 </div>
             </div>
@@ -335,9 +335,9 @@
                 <span class="material-icons" style="font-size: 1.1em;">dashboard</span>
                 <span>Overview &amp; Probing</span>
             </button>
-            <button type="button" class="quickstrm-tab-btn" data-tab="tab-arr" onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-arr');}else{var v=this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
-                <span class="material-icons" style="font-size: 1.1em;">cloud_sync</span>
-                <span>*arr Integrations</span>
+            <button type="button" class="quickstrm-tab-btn" data-tab="tab-arr" onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-arr');}else{var v=this.closest('#QuickSTRMConfigPage')||this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
+                <span class="material-icons" style="font-size: 1.1em;">healing</span>
+                <span>Auto-Heal Lists</span>
             </button>
             <button type="button" class="quickstrm-tab-btn" data-tab="tab-maintenance" onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-maintenance');}else{var v=this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
                 <span class="material-icons" style="font-size: 1.1em;">tune</span>
@@ -482,124 +482,101 @@
             </div>
         </div>
 
-        <!-- ==================== TAB 2: *ARR INTEGRATIONS ==================== -->
+        <!-- ==================== TAB 2: AUTO-HEAL LISTS ==================== -->
         <div id="tab-arr" class="quickstrm-tab-panel quickstrm-tab-content" style="display: none;">
             <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
                 <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
                     <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
-                        <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">cloud_sync</span>
-                        Zero-Touch *arr Suite Integration
+                        <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">healing</span>
+                        Native Auto-Heal List Feeds
                     </h3>
-                    <div style="display: flex; gap: 0.5em; flex-wrap: wrap;">
-                        <button is="emby-button" type="button" id="btnSyncArrWebhooks" class="raised button-submit emby-button" style="margin: 0;">
-                            <span>Sync Webhooks Now</span>
-                        </button>
-                        <button is="emby-button" type="button" id="btnWipeArrWebhooks" class="raised emby-button" style="margin: 0; background: #b71c1c; color: white;">
-                            <span>Wipe All *arr Webhooks</span>
-                        </button>
-                        <button is="emby-button" type="button" id="btnShowAddArrModal" class="raised emby-button" style="margin: 0;">
-                            <span>+ Add Instance</span>
+                    <div style="display: flex; gap: 0.5em; align-items: center;">
+                        <button is="emby-button" type="button" id="btnRefreshAutoHealFeeds" class="raised emby-button" style="margin: 0; padding: 0.45em 0.9em;">
+                            <span class="material-icons" style="font-size: 16px; margin-right: 4px;">refresh</span>
+                            <span>Refresh Feeds</span>
                         </button>
                     </div>
                 </div>
-                <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.4em;">
-                    Connect your Radarr, Sonarr, and Whisparr instances. QuickSTRM automatically provisions schema-driven webhooks so incoming STRM downloads are probed instantly in the High Priority lane, and confirmed 404 links trigger automatic searches for working replacements.
+                <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.6em; line-height: 1.5;">
+                    Zero-overhead, pull-based list feeds for Radarr and Sonarr. When dead .strm links (404/503) are pruned, their IDs are immediately published here for native *arr Custom List ingestion. Feeds are <strong>self-cleaning</strong>: entries are automatically removed the moment they are re-added to Jellyfin, and stale entries automatically expire after 7 days.
                 </div>
 
-                <!-- Jellyfin Callback URL Config Section -->
-                <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.06)); border-radius: 8px; padding: 1.2em; margin-bottom: 1.5em;">
-                    <div style="font-weight: 600; font-size: 0.95em; margin-bottom: 0.4em; display: flex; align-items: center; gap: 0.4em;">
-                        <span class="material-icons" style="font-size: 1.1em; color: var(--theme-primary-color, #00a4dc);">link</span>
-                        Jellyfin Webhook Callback URL
-                    </div>
-                    <div class="inputContainer" style="margin-bottom: 0.4em;">
-                        <input is="emby-input" type="text" id="txtJellyfinInternalUrl" class="emby-input" label="Jellyfin Callback URL for *arr Webhooks" placeholder="e.g. http://jellyfin:8096 or http://192.168.1.100:8096" />
-                        <div class="fieldDescription">The reachable URL of this Jellyfin server as seen by your *arr containers/hosts. Leave blank to default to http://localhost:8096.</div>
-                    </div>
-
-                    <!-- Smart Docker / Localhost Warning Banner -->
-                    <div id="dockerLocalhostWarning" class="quickstrm-warning-banner" style="display: none;">
-                        <span class="material-icons" style="color: #ff9800; font-size: 1.3em;">warning_amber</span>
-                        <div><strong>Warning:</strong> Jellyfin Callback URL is set to localhost, which another Docker container cannot reach. Use your container hostname (e.g., http://jellyfin:8096) or LAN IP.</div>
-                    </div>
-                </div>
-
-                <!-- List of Configured Instances -->
-                <div style="font-weight: 600; font-size: 0.95em; margin-bottom: 0.6em; color: var(--text-muted-color, #aaa);">
-                    Connected Services
-                </div>
-                <div id="arrInstancesList" style="margin-bottom: 1.2em;">
-                    <div style="color: var(--text-muted-color, #777); font-size: 0.9em; padding: 1em 0;">No *arr instances configured. Click "+ Add Instance" above to connect.</div>
-                </div>
-
-                <!-- Add/Edit Instance Panel (collapsible drawer) -->
-                <div id="arrAddInstancePanel" class="paperList" style="display: none; padding: 1.5em; margin-top: 1.2em; border-radius: 8px; border: 1px solid var(--theme-primary-color, #00a4dc);">
-                    <h4 id="arrPanelTitle" style="margin: 0 0 1em 0; font-size: 1.05em; display: flex; align-items: center; gap: 0.4em;">
-                        <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">add_circle_outline</span>
-                        Add *arr Connection
-                    </h4>
-                    <div class="quickstrm-form-row">
-                        <div class="inputContainer">
-                            <label class="inputLabel" for="addArrName">Instance Name</label>
-                            <input is="emby-input" type="text" id="addArrName" class="emby-input" placeholder="e.g., Local Radarr" />
-                        </div>
-                        <div class="selectContainer">
-                            <label class="selectLabel" for="addArrType">Application Type</label>
-                            <select is="emby-select" id="addArrType" class="emby-select">
-                                <option value="Radarr">Radarr</option>
-                                <option value="Sonarr">Sonarr</option>
-                                <option value="Whisparr">Whisparr</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="quickstrm-form-row">
-                        <div class="inputContainer">
-                            <label class="inputLabel" for="addArrBaseUrl">Base URL</label>
-                            <input is="emby-input" type="text" id="addArrBaseUrl" class="emby-input" placeholder="e.g., http://radarr:7878 or http://192.168.1.100:7878" />
-                            <div class="fieldDescription">The reachable URL of the *arr instance. Protocol will be auto-formatted.</div>
-                        </div>
-                        <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
-                            <div class="inputContainer" style="flex-grow: 1; margin: 0;">
-                                <label class="inputLabel" for="addArrApiKey">API Key</label>
+                <!-- Feed Cards Grid -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5em; margin-bottom: 1.8em;">
+                    <!-- Radarr Feed Card -->
+                    <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.08)); border-radius: 8px; padding: 1.4em; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8em;">
+                                <div style="display: flex; align-items: center; gap: 0.5em;">
+                                    <span class="quickstrm-badge" style="background: #2196f3; color: white; font-weight: bold; padding: 0.3em 0.7em;">RADARR</span>
+                                    <span style="font-weight: 600; font-size: 1.05em; color: var(--text-color, #fff);">Movie Recovery Feed</span>
+                                </div>
+                                <div>
+                                    <span id="lblAutoHealRadarrCount" style="font-size: 1.4em; font-weight: bold; color: #2196f3;">0</span>
+                                    <span style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-left: 2px;">queued</span>
+                                </div>
+                            </div>
+                            <div style="font-size: 0.84em; color: var(--text-muted-color, #aaa); margin-bottom: 1em;">
+                                Returns a TMDB-formatted JSON list for Radarr Custom List ingestion.
+                            </div>
+                            <div class="inputContainer" style="margin-bottom: 0.8em;">
+                                <label class="inputLabel" for="txtRadarrFeedUrl">Radarr List URL</label>
                                 <div style="display: flex; gap: 6px; align-items: center;">
-                                    <input is="emby-input" type="password" id="addArrApiKey" class="emby-input" placeholder="Enter 32-character API Key" style="flex-grow: 1;" />
-                                    <button is="emby-button" type="button" id="btnToggleApiKeyVisibility" class="raised emby-button" style="margin: 0; padding: 0.4em 0.8em; font-size: 0.85em; white-space: nowrap;">
-                                        <span>Show</span>
+                                    <input is="emby-input" type="text" id="txtRadarrFeedUrl" readonly class="emby-input" style="flex: 1; font-family: monospace; font-size: 0.85em; background: rgba(0,0,0,0.4);" />
+                                    <button is="emby-button" type="button" id="btnCopyRadarrUrl" class="raised emby-button" style="margin: 0; padding: 0.5em 0.85em; white-space: nowrap;">
+                                        <span class="material-icons" style="font-size: 15px; margin-right: 4px;">content_copy</span>
+                                        <span>Copy</span>
                                     </button>
                                 </div>
                             </div>
-                            <button is="emby-button" type="button" id="btnTestArrConnection" class="raised emby-button" style="margin: 0; white-space: nowrap;">
-                                <span>Test Connection</span>
-                            </button>
                         </div>
-                    </div>
-                    <div class="quickstrm-form-row" style="margin-bottom: 0.4em;">
-                        <div class="inputContainer">
-                            <label class="inputLabel" for="addArrPathFrom">Remote Path (*arr)</label>
-                            <input is="emby-input" type="text" id="addArrPathFrom" class="emby-input" placeholder="e.g., /movies" />
+                        <div style="background: rgba(33, 150, 243, 0.08); border-left: 3px solid #2196f3; border-radius: 4px; padding: 0.6em 0.8em; font-size: 0.8em; color: #bbdefb; margin-top: 0.8em; line-height: 1.4;">
+                            <strong>Radarr Setup:</strong> Settings → Lists → Add (+) → Custom List → Paste URL above → Clean Library: Keep
                         </div>
-                        <div class="inputContainer">
-                            <label class="inputLabel" for="addArrPathTo">Local Path (Jellyfin)</label>
-                            <input is="emby-input" type="text" id="addArrPathTo" class="emby-input" placeholder="e.g., /media/movies" />
-                        </div>
-                    </div>
-                    <div style="margin-bottom: 1.4em;">
-                        <label class="qs-checkbox-row">
-                            <input type="checkbox" id="chkArrAutoHeal" class="qs-checkbox" checked />
-                            <span>Auto-Heal on 404 (Delete dead file record &amp; trigger replacement search command)</span>
-                        </label>
-                    </div>
-                    <div style="display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center;">
-                        <button is="emby-button" type="button" id="btnSaveArrInstance" class="raised button-submit emby-button btnSaveArrConnection">
-                            <span>Save Connection</span>
-                        </button>
-                        <button is="emby-button" type="button" id="btnCancelArrInstance" class="raised emby-button">
-                            <span>Cancel</span>
-                        </button>
                     </div>
 
-                    <!-- Inline Feedback Banner for Drawer -->
-                    <div id="arrConnectionStatusBanner" class="quickstrm-inline-feedback" style="display: none;"></div>
+                    <!-- Sonarr Feed Card -->
+                    <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.08)); border-radius: 8px; padding: 1.4em; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8em;">
+                                <div style="display: flex; align-items: center; gap: 0.5em;">
+                                    <span class="quickstrm-badge" style="background: #00bcd4; color: white; font-weight: bold; padding: 0.3em 0.7em;">SONARR</span>
+                                    <span style="font-weight: 600; font-size: 1.05em; color: var(--text-color, #fff);">Series Recovery Feed</span>
+                                </div>
+                                <div>
+                                    <span id="lblAutoHealSonarrCount" style="font-size: 1.4em; font-weight: bold; color: #00bcd4;">0</span>
+                                    <span style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-left: 2px;">queued</span>
+                                </div>
+                            </div>
+                            <div style="font-size: 0.84em; color: var(--text-muted-color, #aaa); margin-bottom: 1em;">
+                                Returns a TVDB-formatted JSON list for Sonarr Custom List ingestion.
+                            </div>
+                            <div class="inputContainer" style="margin-bottom: 0.8em;">
+                                <label class="inputLabel" for="txtSonarrFeedUrl">Sonarr List URL</label>
+                                <div style="display: flex; gap: 6px; align-items: center;">
+                                    <input is="emby-input" type="text" id="txtSonarrFeedUrl" readonly class="emby-input" style="flex: 1; font-family: monospace; font-size: 0.85em; background: rgba(0,0,0,0.4);" />
+                                    <button is="emby-button" type="button" id="btnCopySonarrUrl" class="raised emby-button" style="margin: 0; padding: 0.5em 0.85em; white-space: nowrap;">
+                                        <span class="material-icons" style="font-size: 15px; margin-right: 4px;">content_copy</span>
+                                        <span>Copy</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="background: rgba(0, 188, 212, 0.08); border-left: 3px solid #00bcd4; border-radius: 4px; padding: 0.6em 0.8em; font-size: 0.8em; color: #b2ebf2; margin-top: 0.8em; line-height: 1.4;">
+                            <strong>Sonarr Setup:</strong> Settings → Import Lists → Add (+) → Custom List → Paste URL above → Monitor: Missing
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Self-Cleaning Mechanics Callout -->
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--line-color, rgba(255,255,255,0.06)); border-radius: 6px; padding: 1em 1.2em; font-size: 0.85em; color: var(--text-muted-color, #999); line-height: 1.5;">
+                    <div style="font-weight: 600; color: var(--text-color, #fff); margin-bottom: 0.4em; display: flex; align-items: center; gap: 0.4em;">
+                        <span class="material-icons" style="font-size: 16px; color: #4caf50;">verified</span>
+                        <span>Zero-Maintenance Architecture</span>
+                    </div>
+                    <div>• <strong>No Inbound Webhooks:</strong> Eliminates API key storage, base URL configuration, and Docker container loopback conflicts.</div>
+                    <div>• <strong>Real-Time Pruning:</strong> When an added or updated item arrives in Jellyfin, its ID is instantly pruned from the feed.</div>
+                    <div>• <strong>7-Day Automatic Expiration:</strong> Impossible-to-find requests are evicted after 7 days, preventing list bloat.</div>
                 </div>
             </div>
         </div>

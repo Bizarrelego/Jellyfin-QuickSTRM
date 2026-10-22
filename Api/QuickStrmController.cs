@@ -1,40 +1,28 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Model.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using QuickSTRM;
 using QuickSTRM.Configuration;
-using QuickSTRM.Models;
 
 namespace QuickSTRM.Api;
 
 /// <summary>
-/// API endpoints for QuickSTRM probe management, live *arr webhooks, and maintenance tools.
+/// API endpoints for QuickSTRM probe management, native Auto-Heal feeds, and maintenance tools.
 /// </summary>
 [ApiController]
 [Route("QuickStrm")]
 public class QuickStrmController : ControllerBase
 {
-    private static readonly object _debounceLock = new();
-    private static ConcurrentDictionary<string, byte> _pendingFileSystemChanges = new(StringComparer.OrdinalIgnoreCase);
-    private static Timer? _debounceTimer;
-    private static ILibraryMonitor? _staticLibraryMonitor;
-    private static ILogger? _staticLogger;
-
     private readonly ProbeService _probeService;
-    private readonly ArrIntegrationService _arrIntegrationService;
+    private readonly AutoHealService _autoHealService;
     private readonly ILibraryManager _libraryManager;
     private readonly ILibraryMonitor? _libraryMonitor;
     private readonly ILogger<QuickStrmController> _logger;
@@ -42,25 +30,22 @@ public class QuickStrmController : ControllerBase
 
     public QuickStrmController(
         ProbeService probeService,
-        ArrIntegrationService arrIntegrationService,
+        AutoHealService autoHealService,
         ILibraryManager libraryManager,
         TelemetryService telemetryService,
         ILogger<QuickStrmController> logger,
         ILibraryMonitor? libraryMonitor = null)
     {
         _probeService = probeService;
-        _arrIntegrationService = arrIntegrationService;
+        _autoHealService = autoHealService;
         _libraryManager = libraryManager;
         _telemetryService = telemetryService;
         _logger = logger;
         _libraryMonitor = libraryMonitor;
-
-        _staticLibraryMonitor = libraryMonitor ?? _staticLibraryMonitor;
-        _staticLogger = logger ?? _staticLogger;
     }
 
     /// <summary>
-    /// Returns a summary of .strm items in the library.
+    /// Returns a summary of .strm items in the library and auto-heal feed metrics.
     /// </summary>
     [HttpGet("Summary")]
     [Authorize(Policy = "RequiresElevation")]
@@ -72,7 +57,10 @@ public class QuickStrmController : ControllerBase
             Total = total,
             Probed = probed,
             Unprobed = unprobed,
-            CacheSize = _probeService.FailureCacheCount
+            CacheSize = _probeService.FailureCacheCount,
+            AutoHealRadarrCount = _autoHealService.RadarrCount,
+            AutoHealSonarrCount = _autoHealService.SonarrCount,
+            AutoHealTotalCount = _autoHealService.TotalCount
         });
     }
 
@@ -99,49 +87,116 @@ public class QuickStrmController : ControllerBase
     }
 
     /// <summary>
-    /// Clears the recent action ledger history.
+    /// Empties recent action ledger history.
     /// </summary>
     [HttpPost("Ledger/Clear")]
     [Authorize(Policy = "RequiresElevation")]
     public ActionResult ClearLedger()
     {
-        _telemetryService.ClearLedger();
+        var config = Plugin.Instance?.Configuration;
+        if (config is not null)
+        {
+            lock (config)
+            {
+                config.ClearLedger();
+                Plugin.Instance?.SaveConfiguration();
+            }
+        }
+
         return NoContent();
     }
 
+    /// <summary>
+    /// Returns the live Radarr recovery feed formatted as a native Custom List JSON array.
+    /// </summary>
+    [HttpGet("AutoHeal/Radarr")]
+    [AllowAnonymous]
+    [Produces("application/json")]
+    public ActionResult GetRadarrAutoHealFeed()
+    {
+        return Ok(_autoHealService.GetRadarrFeed());
+    }
 
     /// <summary>
-    /// Starts a manual pre-probe task by dispatching an asynchronous background library scan.
-    /// Returns 202 Accepted immediately without blocking the HTTP request thread.
-    /// Mode/Scope: "Incremental" (unprobed items only) or "All" / "Full" (all .strm items).
+    /// Returns the live Sonarr recovery feed formatted as a native Custom List JSON array.
     /// </summary>
-    [HttpPost("Probe")]
-    [HttpPost("Probe/Start")]
-    [Authorize(Policy = "RequiresElevation")]
-    public ActionResult StartProbe([FromQuery] string? mode = null, [FromBody] ProbeStartRequest? body = null)
+    [HttpGet("AutoHeal/Sonarr")]
+    [AllowAnonymous]
+    [Produces("application/json")]
+    public ActionResult GetSonarrAutoHealFeed()
     {
-        var scope = body?.Scope ?? body?.Mode ?? mode ?? "Incremental";
-        var isIncremental = !string.Equals(scope, "All", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(scope, "Full", StringComparison.OrdinalIgnoreCase);
+        return Ok(_autoHealService.GetSonarrFeed());
+    }
 
-        var probeMode = isIncremental ? ProbeMode.Incremental : ProbeMode.All;
-        _ = _probeService.QueueLibraryScanAsync(probeMode);
-
-        _logger.LogInformation(
-            "QuickSTRM: Manual probe initiated with scope {Scope}; background scan dispatched",
-            isIncremental ? "Incremental" : "All");
-
-        return Accepted(new
+    /// <summary>
+    /// Returns summary metrics for the Auto-Heal list feeds.
+    /// </summary>
+    [HttpGet("AutoHeal/Summary")]
+    [Produces("application/json")]
+    public ActionResult GetAutoHealSummary()
+    {
+        return Ok(new
         {
-            Success = true,
-            ScanningLibrary = true,
-            Scope = isIncremental ? "Incremental" : "All",
-            Message = $"Scanning library and queueing {(isIncremental ? "Incremental" : "All")} probe items in background."
+            RadarrCount = _autoHealService.RadarrCount,
+            SonarrCount = _autoHealService.SonarrCount,
+            TotalCount = _autoHealService.TotalCount
         });
     }
 
     /// <summary>
-    /// Stops the currently running probe task.
+    /// Returns the current probe task status for the live progress bar.
+    /// </summary>
+    [HttpGet("Status")]
+    [HttpGet("Probe/Status")]
+    [Authorize(Policy = "RequiresElevation")]
+    public ActionResult GetStatus()
+    {
+        return Ok(new
+        {
+            State = _probeService.State,
+            TotalItems = _probeService.TotalItems,
+            Total = _probeService.TotalItems,
+            ProcessedItems = _probeService.ProcessedItems,
+            Processed = _probeService.ProcessedItems,
+            CurrentItemName = _probeService.CurrentItemName,
+            CurrentItem = _probeService.CurrentItemName,
+            ActiveProbes = _probeService.ActiveProbes,
+            MaxConcurrentProbes = ProbeService.MaxConcurrentProbes
+        });
+    }
+
+    /// <summary>
+    /// Starts a manual background probe scan across the library.
+    /// Returns 202 Accepted immediately without blocking the HTTP request thread.
+    /// </summary>
+    [HttpPost("Probe")]
+    [HttpPost("Probe/Start")]
+    [Authorize(Policy = "RequiresElevation")]
+    public async Task<ActionResult> StartProbe([FromBody] ProbeStartRequest? request, [FromQuery] string? mode)
+    {
+        var modeStr = request?.Mode ?? mode ?? "Incremental";
+        var probeMode = string.Equals(modeStr, "All", StringComparison.OrdinalIgnoreCase)
+            ? ProbeMode.All
+            : ProbeMode.Incremental;
+
+        if (_probeService.IsScanningLibrary)
+        {
+            return Conflict(new { Message = "A probe batch or whole-library scan is already running." });
+        }
+
+        await _probeService.QueueLibraryScanAsync(probeMode).ConfigureAwait(false);
+
+        return Accepted(new
+        {
+            Message = $"Probe queued in {probeMode} mode. Processing asynchronously.",
+            Mode = probeMode.ToString(),
+            State = "Running",
+            Enqueued = _probeService.TotalItems
+        });
+    }
+
+    /// <summary>
+    /// Cancels any active manual probe run.
     /// </summary>
     [HttpPost("Probe/Stop")]
     [Authorize(Policy = "RequiresElevation")]
@@ -152,50 +207,26 @@ public class QuickStrmController : ControllerBase
     }
 
     /// <summary>
-    /// Returns the current probe task status and progress.
-    /// </summary>
-    [HttpGet("Probe/Status")]
-    [Authorize(Policy = "RequiresElevation")]
-    public ActionResult GetProbeStatus()
-    {
-        return Ok(new
-        {
-            _probeService.State,
-            Processed = _probeService.ProcessedItems,
-            Total = _probeService.TotalItems,
-            CurrentItem = _probeService.CurrentItemName
-        });
-    }
-
-    /// <summary>
-    /// Returns the size and status of the background persistence queue across high and low lanes.
+    /// Returns queue depth, active worker count, circuit breaker status, and failure counts.
     /// </summary>
     [HttpGet("Queue")]
     [Authorize(Policy = "RequiresElevation")]
-    public ActionResult GetQueue()
+    public ActionResult GetQueueStatus()
     {
-        var running = _probeService.ActiveProbes;
-        var waiting = _probeService.PersistQueueWaiting;
-        var scanning = _probeService.IsScanningLibrary;
-        var isBatchRunning = _probeService.IsBatchRunning;
         return Ok(new
         {
-            Waiting = waiting,
-            Running = running,
-            ActiveCount = running,
-            QueueCount = waiting,
-            IsRunning = isBatchRunning || scanning || running > 0 || waiting > 0,
-            Total = _probeService.PersistQueueTotal,
-            HighPriorityWaiting = _probeService.HighPriorityQueueWaiting,
-            LowPriorityWaiting = _probeService.LowPriorityQueueWaiting,
-            ScanningLibrary = scanning,
-            CircuitTripped = _probeService.IsCircuitTripped,
+            HighPriorityQueueDepth = _probeService.HighPriorityQueueWaiting,
+            LowPriorityQueueDepth = _probeService.LowPriorityQueueWaiting,
+            PersistQueueDepth = _probeService.PersistQueueWaiting,
+            ActiveProbes = _probeService.ActiveProbes,
+            FailureCacheSize = _probeService.FailureCacheCount,
+            CircuitBreakerTripped = _probeService.IsCircuitTripped,
             CircuitBreakerOpen = _probeService.IsCircuitTripped,
             CircuitState = _probeService.CircuitState,
-            CooldownSecondsRemaining = (int)Math.Ceiling(_probeService.CircuitCooldownRemaining.TotalSeconds),
+            CircuitCooldownRemainingSeconds = (int)_probeService.CircuitCooldownRemaining.TotalSeconds,
             ConsecutiveFailures = _probeService.ConsecutiveFailures,
-            CacheSize = _probeService.FailureCacheCount,
-            Status = scanning ? "Scanning" : (running + waiting == 0 ? "Idle" : running > 0 ? "Running" : "Waiting")
+            ScanningLibrary = _probeService.IsScanningLibrary,
+            IsScanningLibrary = _probeService.IsScanningLibrary
         });
     }
 
@@ -219,335 +250,6 @@ public class QuickStrmController : ControllerBase
     {
         _probeService.ResetCircuitBreaker();
         return NoContent();
-    }
-
-    /// <summary>
-    /// Receives live incoming JSON webhook payloads from Radarr, Sonarr, and Whisparr.
-    /// Protected via a dedicated query string token; validates strongly-typed payload schema,
-    /// debounces filesystem monitor reports to protect SQLite, and enqueues newly detected items into the High Priority lane.
-    /// </summary>
-    [HttpPost("ArrWebhook")]
-    public async Task<ActionResult> HandleArrWebhook([FromBody] ArrWebhookPayload? payload)
-    {
-        // 1. Immediately validate parsed payload
-        if (payload is null || string.IsNullOrWhiteSpace(payload.EventType))
-        {
-            return BadRequest(new { status = "bad_request", message = "Invalid or missing webhook payload." });
-        }
-
-        // 2. Authorize using dedicated WebhookSecret query token
-        var config = Plugin.Instance?.Configuration;
-        var expectedSecret = config?.WebhookSecret;
-        if (!string.IsNullOrEmpty(expectedSecret))
-        {
-            var providedToken = Request?.Query != null && Request.Query.TryGetValue("token", out var tokenVal) ? tokenVal.ToString() : null;
-            if (string.IsNullOrEmpty(providedToken) || !string.Equals(expectedSecret, providedToken, StringComparison.Ordinal))
-            {
-                _logger.LogWarning("QuickSTRM Webhook: Unauthorized access attempt - invalid or missing security token");
-                return Unauthorized(new { status = "unauthorized", message = "Invalid or missing webhook token." });
-            }
-        }
-
-        try
-        {
-            // 3. Switch on EventType to extract file path or handle unsupported/test events
-            string? incomingPath = null;
-            switch (payload.EventType.Trim())
-            {
-                case "Test":
-                case "test":
-                case "Grab":
-                case "grab":
-                    _logger.LogInformation("QuickSTRM Webhook: Received {EventType} event (acknowledged without enqueuing)", payload.EventType);
-                    return Ok(new { status = "success", message = $"{payload.EventType} acknowledged", eventType = payload.EventType });
-
-                case "Download":
-                case "download":
-                    // Radarr/Whisparr: Movie.FilePath or MovieFile.Path; Sonarr: Episodes (Path or SourcePath), EpisodeFile.Path, or Series.Path
-                    incomingPath = payload.Movie?.FilePath
-                        ?? payload.MovieFile?.Path
-                        ?? payload.Movie?.FolderPath
-                        ?? ExtractEpisodePath(payload)
-                        ?? payload.EpisodeFile?.Path
-                        ?? payload.Series?.Path;
-                    break;
-
-                case "Rename":
-                case "rename":
-                    incomingPath = payload.Movie?.FilePath
-                        ?? payload.MovieFile?.Path
-                        ?? payload.Movie?.FolderPath
-                        ?? ExtractEpisodePath(payload)
-                        ?? payload.EpisodeFile?.Path
-                        ?? payload.Series?.Path;
-                    break;
-
-                case "MovieFileDelete":
-                case "MovieDelete":
-                case "movieFileDelete":
-                case "movieDelete":
-                    incomingPath = payload.Movie?.FilePath
-                        ?? payload.MovieFile?.Path
-                        ?? payload.Movie?.FolderPath;
-                    break;
-
-                case "EpisodeFileDelete":
-                case "SeriesDelete":
-                case "episodeFileDelete":
-                case "seriesDelete":
-                    incomingPath = ExtractEpisodePath(payload)
-                        ?? payload.EpisodeFile?.Path
-                        ?? payload.Series?.Path;
-                    break;
-
-                default:
-                    _logger.LogInformation("QuickSTRM Webhook: Ignored unsupported event type '{EventType}'", payload.EventType);
-                    return Ok(new { status = "ignored", reason = "unsupported_event_type", eventType = payload.EventType });
-            }
-
-            // 4. Validate extracted file path
-            if (string.IsNullOrWhiteSpace(incomingPath))
-            {
-                _logger.LogWarning("QuickSTRM Webhook: Received {EventType} event but could not extract a valid file path", payload.EventType);
-                return BadRequest(new { status = "bad_request", message = $"Could not extract a valid file path for {payload.EventType} event." });
-            }
-
-            var localPath = _arrIntegrationService.TranslateArrPathToLocal(incomingPath, out var instance);
-            if (localPath is null)
-            {
-                return Ok(new { status = "ignored", reason = "no_matching_instance_path", incomingPath });
-            }
-
-            _logger.LogInformation("QuickSTRM Webhook: Received {EventType} event from {Instance} for {Path} -> {LocalPath}", payload.EventType, instance?.Name, incomingPath, localPath);
-
-            // 5. Debounce ILibraryMonitor updates to protect SQLite from concurrent write locks
-            _pendingFileSystemChanges.TryAdd(localPath, 0);
-            lock (_debounceLock)
-            {
-                if (_debounceTimer is null)
-                {
-                    _debounceTimer = new Timer(OnDebounceTimerElapsed, null, TimeSpan.FromSeconds(3), Timeout.InfiniteTimeSpan);
-                }
-                else
-                {
-                    _debounceTimer.Change(TimeSpan.FromSeconds(3), Timeout.InfiniteTimeSpan);
-                }
-            }
-
-            // 6. Immediately enqueue matching .strm items into High Priority lane
-            if (localPath.EndsWith(".strm", StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(localPath))
-            {
-                var item = _libraryManager.FindByPath(localPath, false);
-                if (item is not null)
-                {
-                    _probeService.EnqueueBackgroundPersist(item, highPriority: true);
-                }
-                else
-                {
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(2000).ConfigureAwait(false);
-                        var newItem = _libraryManager.FindByPath(localPath, false);
-                        if (newItem is not null)
-                        {
-                            _probeService.EnqueueBackgroundPersist(newItem, highPriority: true);
-                        }
-                    });
-                }
-            }
-
-            return Ok(new { status = "success", eventType = payload.EventType, localPath });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "QuickSTRM: Error processing *arr webhook payload");
-            return Ok(new { status = "error", message = ex.Message });
-        }
-    }
-
-    private static string? ExtractEpisodePath(ArrWebhookPayload payload)
-    {
-        if (payload.Episodes is not null)
-        {
-            foreach (var ep in payload.Episodes)
-            {
-                if (!string.IsNullOrWhiteSpace(ep.Path))
-                {
-                    return ep.Path;
-                }
-
-                if (!string.IsNullOrWhiteSpace(ep.SourcePath))
-                {
-                    return ep.SourcePath;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private static void OnDebounceTimerElapsed(object? state)
-    {
-        ConcurrentDictionary<string, byte> batched;
-        lock (_debounceLock)
-        {
-            _debounceTimer?.Dispose();
-            _debounceTimer = null;
-            batched = Interlocked.Exchange(ref _pendingFileSystemChanges, new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase));
-        }
-
-        if (batched.IsEmpty)
-        {
-            return;
-        }
-
-        var monitor = _staticLibraryMonitor;
-        if (monitor is null)
-        {
-            return;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            _staticLogger?.LogInformation("QuickSTRM: Flushing debounced file system changes for {Count} items with 50ms pacing", batched.Count);
-
-            foreach (var path in batched.Keys)
-            {
-                try
-                {
-                    monitor.ReportFileSystemChanged(path);
-                }
-                catch (Exception ex)
-                {
-                    _staticLogger?.LogWarning(ex, "QuickSTRM: Error reporting file system change for {Path}", path);
-                }
-
-                await Task.Delay(50).ConfigureAwait(false);
-            }
-        });
-    }
-
-    /// <summary>
-    /// Tests connectivity to all configured *arr instances and provisions/synchronizes webhooks.
-    /// Manual override bypass: triggers an immediate, single-attempt sync bypassing the 5-attempt startup retry loop.
-    /// </summary>
-    [HttpPost("Arr/TestAndSync")]
-    [Authorize(Policy = "RequiresElevation")]
-    public async Task<ActionResult> TestAndSyncArr()
-    {
-        var results = await _arrIntegrationService.SyncWebhooksAsync().ConfigureAwait(false);
-        var config = Plugin.Instance?.Configuration;
-        var instances = config?.ArrInstances ?? new List<ArrInstanceConfig>();
-
-        return Ok(new
-        {
-            SyncedCount = instances.Count(i => i.ProvisionedWebhookId.HasValue),
-            TotalCount = instances.Count,
-            Results = instances.Select(i => new
-            {
-                i.Name,
-                Synced = i.ProvisionedWebhookId.HasValue,
-                i.ProvisionedWebhookId,
-                i.LastSyncError,
-                i.LastSyncUtc
-            })
-        });
-    }
-
-    /// <summary>
-    /// Synchronizes and tests a single configured *arr instance by zero-based index.
-    /// Allows 1-click sync/test directly from the instance card on the dashboard without opening the edit form.
-    /// </summary>
-    [HttpPost("Arr/SyncInstance/{index}")]
-    [Authorize(Policy = "RequiresElevation")]
-    public async Task<ActionResult> SyncArrInstance([FromRoute] int index, CancellationToken ct)
-    {
-        var config = Plugin.Instance?.Configuration;
-        if (config is null || index < 0 || index >= config.ArrInstances.Count)
-        {
-            return NotFound(new { Message = $"Arr instance at index {index} not found." });
-        }
-
-        var instance = config.ArrInstances[index];
-        var webhookUrl = $"{_arrIntegrationService.GetEffectiveJellyfinUrl()}/QuickStrm/ArrWebhook?token={config.WebhookSecret}";
-
-        var result = await _arrIntegrationService.SyncSingleInstanceAsync(instance, webhookUrl, ct).ConfigureAwait(false);
-
-        return Ok(new
-        {
-            Success = result.Success,
-            Message = result.Message,
-            Instance = new
-            {
-                instance.Name,
-                Synced = instance.ProvisionedWebhookId.HasValue,
-                instance.ProvisionedWebhookId,
-                instance.LastSyncError,
-                instance.LastSyncUtc
-            }
-        });
-    }
-
-    /// <summary>
-    /// Removes all auto-provisioned webhooks from all configured *arr instances for a zero-footprint uninstall.
-    /// </summary>
-    [HttpPost("Arr/WipeWebhooks")]
-    [Authorize(Policy = "RequiresElevation")]
-    public async Task<ActionResult> WipeArrWebhooks()
-    {
-        var results = await _arrIntegrationService.RemoveAllWebhooksAsync().ConfigureAwait(false);
-        return Ok(results);
-    }
-
-    /// <summary>
-    /// Performs a live connectivity check against an *arr instance without saving configuration or provisioning webhooks.
-    /// </summary>
-    [HttpPost("Arr/TestConnection")]
-    [Authorize(Policy = "RequiresElevation")]
-    public async Task<ActionResult> TestArrConnection([FromBody] ArrInstanceConfig testConfig, CancellationToken ct)
-    {
-        var (success, message) = await _arrIntegrationService.TestConnectionAsync(testConfig, ct).ConfigureAwait(false);
-        return Ok(new
-        {
-            Success = success,
-            Message = message
-        });
-    }
-
-    /// <summary>
-    /// Removes a configured *arr instance by index.
-    /// </summary>
-    [HttpDelete("Arr/Instance/{index:int}")]
-    [HttpPost("Arr/Instance/{index:int}/Delete")]
-    [Authorize(Policy = "RequiresElevation")]
-    public ActionResult DeleteArrInstance([FromRoute] int index)
-    {
-        var config = Plugin.Instance?.Configuration;
-        if (config is null)
-        {
-            return NotFound(new { Message = "Plugin configuration not found." });
-        }
-
-        lock (config)
-        {
-            if (index < 0 || index >= config.ArrInstances.Count)
-            {
-                return BadRequest(new { Message = $"Invalid instance index {index}." });
-            }
-
-            var removed = config.ArrInstances[index];
-            config.ArrInstances.RemoveAt(index);
-            Plugin.Instance?.SaveConfiguration();
-
-            _logger.LogInformation("QuickSTRM: Removed *arr instance {Name} at index {Index}", removed.Name, index);
-            _ = _telemetryService.LogEventAsync("ArrSync", $"Removed *arr instance {removed.Name} ({removed.ArrType}).");
-
-            return Ok(new
-            {
-                Removed = true,
-                Instances = config.ArrInstances
-            });
-        }
     }
 
     /// <summary>

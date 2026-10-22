@@ -1,9 +1,9 @@
 {
   "guid": "1278dbd6-8399-46c0-8e64-31f2d9e022ae",
   "name": "QuickSTRM",
-  "description": "Eliminates remote ffprobe latency with instant-start playback, zero-touch *arr suite orchestration, 404 auto-healing, and low-power hardware safeguards.",
-  "overview": "Zero-touch .strm orchestration & instant playback suite",
-  "version": "3.2.0",
+  "description": "Eliminates remote ffprobe latency with instant-start playback, native self-cleaning auto-heal list feeds, and low-power hardware safeguards.",
+  "overview": "Instant-start playback & native auto-heal feeds for .strm libraries",
+  "version": "4.1.0",
   "targetAbi": "12.2.0.0",
   "owner": "Bizarrelego",
   "category": "General",
