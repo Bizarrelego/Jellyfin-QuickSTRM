@@ -172,12 +172,14 @@ public class QuickStrmController : ControllerBase
     [HttpPost("Probe")]
     [HttpPost("Probe/Start")]
     [Authorize(Policy = "RequiresElevation")]
-    public async Task<ActionResult> StartProbe([FromBody] ProbeStartRequest? request, [FromQuery] string? mode)
+    public async Task<ActionResult> StartProbe([FromQuery] string? mode = null, [FromBody] ProbeRequestDto? body = null)
     {
-        var modeStr = request?.Mode ?? mode ?? "Incremental";
-        var probeMode = string.Equals(modeStr, "All", StringComparison.OrdinalIgnoreCase)
-            ? ProbeMode.All
-            : ProbeMode.Incremental;
+        var rawMode = mode ?? body?.Mode;
+        var probeMode = string.Equals(rawMode, "FullRefresh", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(rawMode, "Full", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(rawMode, "All", StringComparison.OrdinalIgnoreCase)
+            ? ProbeMode.FullRefresh
+            : ProbeMode.OnlyUnprobed;
 
         if (_probeService.IsScanningLibrary)
         {
@@ -331,10 +333,17 @@ public class RewriteUrlsRequest
 }
 
 /// <summary>
+/// Request payload for probe requests.
+/// </summary>
+public class ProbeRequestDto
+{
+    public string? Mode { get; set; }
+}
+
+/// <summary>
 /// Request payload for starting a manual library pre-probe.
 /// </summary>
-public class ProbeStartRequest
+public class ProbeStartRequest : ProbeRequestDto
 {
     public string? Scope { get; set; }
-    public string? Mode { get; set; }
 }

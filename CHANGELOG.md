@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.1.1] - 2026-10-22
+
+### 🛠️ Pre-Probe Execution, SQLite Stream Persistence & Dual Timeout Hardening
+
+Targeted reliability and metadata persistence release resolving pre-probe consumer triggering, TMDB `RunTimeTicks` false-positives, unified `[FromQuery]` and `[FromBody]` mode binding, local/VFS `.strm` target probing, and direct SQLite `MediaStream` persistence.
+
+### Added
+- **Automated Regression Suite (`ProbeExecutionTests.cs`)**:
+  - `QueueLibraryScanAsync_TriggersConsumerAndProbesAllQueuedItems`: Validates unprobed `.strm` items with TMDB `RunTimeTicks` but 0 width/height are accurately detected, the background consumer is triggered automatically, and `QueueCount` drains to 0.
+  - `StartProbe_FullRefreshMode_ReprobesItemsEvenWithWidthAndHeight`: Enforces that `ProbeMode.FullRefresh` re-probes all `.strm` items regardless of existing pixel dimensions.
+- **Local & Mounted VFS `.strm` Probing**:
+  - Native support for local mount and VFS targets (`/mnt/...`, `\\...`, and drive letters) inside `.strm` files via `MediaProtocol.File` with hold-open retry resilience.
+
+### Changed
+- **Unified `[FromQuery]` & `[FromBody]` Mode Binding (`QuickStrmController.cs` & `configPage.js`)**:
+  - Accepts both query parameter and JSON request body via `ProbeRequestDto`, resolving `"FullRefresh"` and `"Full"` (case-insensitive) to `ProbeMode.FullRefresh` and defaulting to `ProbeMode.OnlyUnprobed`.
+  - Dashboard UI sends the probe mode in both the query string and JSON payload to ensure compatibility across all Jellyfin `ApiClient` configurations.
+- **Queue Consumer Auto-Triggering (`ProbeService.cs`)**:
+  - Automatically triggers queue worker processing (`EnsureConsumerRunning()`) whenever library scan batches are enqueued, preventing items from remaining stranded.
+  - Flushes negative failure cache and resolved URL cache on `FullRefresh` scans.
+  - Keeps `IsBatchRunning` active until scanning, queue draining, and active probe slots have fully completed.
+- **TMDB Metadata Disambiguation (`ProbeService.cs`)**:
+  - Replaced ambiguous `RunTimeTicks > 0` fast-path checks with strict `Width > 0 && Height > 0` validation, preventing TMDB/TVDB pre-populated runtimes from masking unprobed streams.
+  - Updated `ScaleTests.cs` mocked probed items to maintain the 250,000-item evaluation in `< 15ms`.
+- **Dual-Stage Timeout Architecture (`ProbeService.cs`)**:
+  - Preserved strict 8-second timeout for initial HTTP preflight socket checks.
+  - Expanded `IMediaEncoder.GetMediaInfo` probing timeout to 25 seconds for reliable container header and stream inspection on cold Usenet/cloud mounts.
+- **Direct SQLite `MediaStream` Persistence (`ItemRepositoryExtensions.cs`)**:
+  - Directly persists probed `MediaStream` descriptors to SQLite via cached reflection on `IItemRepository.SaveMediaStreams` and commits metadata edits via `UpdateToRepositoryAsync`.
+
+---
 ## [4.1.0] - 2026-10-22
 
 ### ⚡ Aggressive TCP Connection Pooling & Inotify Event Storm Debouncing

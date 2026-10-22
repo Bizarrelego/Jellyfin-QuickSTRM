@@ -27,6 +27,7 @@ using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Activity;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace QuickSTRM;
 
@@ -37,7 +38,8 @@ public enum ProbeMode
 {
     Incremental,
     All,
-    OnlyUnprobed = Incremental
+    OnlyUnprobed = Incremental,
+    FullRefresh = All
 }
 
 /// <summary>
@@ -96,7 +98,33 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly Channel<BaseItem> _lowPriorityChannel = Channel.CreateBounded<BaseItem>(
         new BoundedChannelOptions(MaxPendingPersist) { FullMode = BoundedChannelFullMode.DropWrite });
     private readonly List<Task> _workerTasks = new();
+    private readonly object _workerLock = new();
     private readonly IItemRepository? _itemRepository;
+
+    /// <summary>
+    /// Ensures consumer worker tasks are active and processing the probe queue.
+    /// </summary>
+    public void EnsureConsumerRunning()
+    {
+        if (_shutdownCts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        lock (_workerLock)
+        {
+            _workerTasks.RemoveAll(t => t.IsCompleted);
+            while (_workerTasks.Count < MaxConcurrentProbes)
+            {
+                _workerTasks.Add(Task.Run(() => ProcessQueueLoopAsync(_shutdownCts.Token)));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Triggers immediate queue draining by ensuring consumer loops are active.
+    /// </summary>
+    public void TriggerQueueProcessing() => EnsureConsumerRunning();
 
     /// <summary>
     /// Event raised when a dead .strm file is deleted due to permanent 404 failure,
@@ -112,6 +140,14 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     /// <summary>Gets the number of items queued for background persistence that are still waiting for a probe slot.</summary>
     public int PersistQueueWaiting => HighPriorityQueueWaiting + LowPriorityQueueWaiting;
+
+    /// <summary>Gets the total number of items currently waiting in the persistence queues.</summary>
+    public int QueueCount => PersistQueueWaiting;
+
+    private readonly ConcurrentDictionary<Guid, IReadOnlyList<MediaStream>> _inMemoryStreams = new();
+
+    /// <summary>Gets in-memory cached media stream descriptors keyed by item ID.</summary>
+    public IReadOnlyDictionary<Guid, IReadOnlyList<MediaStream>> InMemoryStreams => _inMemoryStreams;
 
     /// <summary>Gets the number of queued items currently being persisted (holding a probe slot).</summary>
     public int PersistQueueRunning => ActiveProbes;
@@ -242,14 +278,13 @@ public sealed class ProbeService : IHostedService, IDisposable
     {
         _libraryManager.ItemAdded += OnItemAdded;
 
-        // Launch worker loops for the two-lane priority queue
-        for (var i = 0; i < MaxConcurrentProbes; i++)
-        {
-            _workerTasks.Add(Task.Run(() => ProcessQueueLoopAsync(_shutdownCts.Token)));
-        }
+        EnsureConsumerRunning();
 
         // Launch background maintenance loop (periodic cache sweep every 10 minutes)
-        _workerTasks.Add(Task.Run(() => MaintenanceLoopAsync(_shutdownCts.Token)));
+        lock (_workerLock)
+        {
+            _workerTasks.Add(Task.Run(() => MaintenanceLoopAsync(_shutdownCts.Token)));
+        }
 
         return Task.CompletedTask;
     }
@@ -262,9 +297,15 @@ public sealed class ProbeService : IHostedService, IDisposable
         _lowPriorityChannel.Writer.TryComplete();
         StopProbe();
 
+        List<Task> tasksToWait;
+        lock (_workerLock)
+        {
+            tasksToWait = new List<Task>(_workerTasks);
+        }
+
         try
         {
-            await Task.WhenAll(_workerTasks).ConfigureAwait(false);
+            await Task.WhenAll(tasksToWait).ConfigureAwait(false);
         }
         catch
         {
@@ -380,6 +421,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
 
         Interlocked.Exchange(ref _isBatchRunning, 1);
+        EnsureConsumerRunning();
         return true;
     }
 
@@ -393,6 +435,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             EnqueueBackgroundPersist(item, highPriority, force);
         }
+        EnsureConsumerRunning();
     }
 
     private async Task ProcessQueueLoopAsync(CancellationToken ct)
@@ -1489,6 +1532,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             // Resolve target path if source.Path points to a .strm file
             var targetPath = source.Path;
+            var isStrm = false;
             if (!string.IsNullOrEmpty(targetPath) && targetPath.EndsWith(".strm", StringComparison.OrdinalIgnoreCase))
             {
                 try
@@ -1497,6 +1541,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     if (!string.IsNullOrEmpty(resolvedUrl))
                     {
                         targetPath = resolvedUrl;
+                        isStrm = true;
                     }
                 }
                 catch (Exception)
@@ -1504,9 +1549,41 @@ public sealed class ProbeService : IHostedService, IDisposable
                 }
             }
 
-            // 1. If target local path does not exist yet: hold-open retry loop
-            if (!string.IsNullOrEmpty(targetPath) && Path.IsPathRooted(targetPath) && !targetPath.Contains("://", StringComparison.Ordinal))
+            var isHttp = !string.IsNullOrEmpty(targetPath) &&
+                         (targetPath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                          targetPath.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+
+            if (isHttp)
             {
+                source.Protocol = MediaProtocol.Http;
+                source.Path = targetPath;
+
+                // Strict 8-second CancellationTokenSource on HTTP preflight / socket connection phase
+                using var preflightCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                using var linkedPreflight = CancellationTokenSource.CreateLinkedTokenSource(budgetToken, preflightCts.Token);
+
+                if (Uri.TryCreate(targetPath, UriKind.Absolute, out var uri))
+                {
+                    var httpResult = await CheckHttpEndpointWithHoldOpenRetryAsync(uri, linkedPreflight.Token).ConfigureAwait(false);
+                    if (!httpResult.IsHealthy)
+                    {
+                        _logger.LogWarning("QuickSTRM: Inline probe target HTTP endpoint dead after hold-open retries: {Uri} ({Status})", uri, httpResult.StatusCode);
+                        var itemToFail = item ?? (Guid.TryParse(source.Id, out var id) ? _libraryManager.GetItemById(id) : null);
+                        if (itemToFail is not null)
+                        {
+                            MarkPersistFailed(itemToFail);
+                            HandleFailure(itemToFail, httpResult.FailureKind);
+                        }
+                        return null;
+                    }
+                }
+            }
+            else if (isStrm || (!string.IsNullOrEmpty(targetPath) && Path.IsPathRooted(targetPath) && !targetPath.Contains("://", StringComparison.Ordinal)))
+            {
+                // Local or mounted VFS file path (e.g., /mnt/... or \\...)
+                source.Protocol = MediaProtocol.File;
+                source.Path = targetPath;
+
                 if (!File.Exists(targetPath))
                 {
                     var exists = false;
@@ -1533,23 +1610,6 @@ public sealed class ProbeService : IHostedService, IDisposable
                     }
                 }
             }
-            // 2. If target is HTTP: verify readiness before acquiring probe slot
-            else if (!string.IsNullOrEmpty(targetPath) && Uri.TryCreate(targetPath, UriKind.Absolute, out var uri)
-                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
-            {
-                var httpResult = await CheckHttpEndpointWithHoldOpenRetryAsync(uri, budgetToken).ConfigureAwait(false);
-                if (!httpResult.IsHealthy)
-                {
-                    _logger.LogWarning("QuickSTRM: Inline probe target HTTP endpoint dead after hold-open retries: {Uri} ({Status})", uri, httpResult.StatusCode);
-                    var itemToFail = item ?? (Guid.TryParse(source.Id, out var id) ? _libraryManager.GetItemById(id) : null);
-                    if (itemToFail is not null)
-                    {
-                        MarkPersistFailed(itemToFail);
-                        HandleFailure(itemToFail, httpResult.FailureKind);
-                    }
-                    return null;
-                }
-            }
 
             try
             {
@@ -1561,7 +1621,8 @@ public sealed class ProbeService : IHostedService, IDisposable
                 return null;
             }
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            // Dedicated 25-second timeout for GetMediaInfo so cold Usenet/InfiniDysk streams have time
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
             using var linkedBudget = CancellationTokenSource.CreateLinkedTokenSource(budgetToken, cts.Token);
 
             try
@@ -1575,11 +1636,18 @@ public sealed class ProbeService : IHostedService, IDisposable
                         ExtractChapters = false
                     },
                     linkedBudget.Token).ConfigureAwait(false);
+
+                if (mediaInfo is not null && item is not null)
+                {
+                    var streams = mediaInfo.MediaStreams?.ToList() ?? new List<MediaStream>();
+                    _inMemoryStreams[item.Id] = streams;
+                }
+
                 return mediaInfo;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 8s for inline source {Id}", source.Id);
+                _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 25s for inline source {Id}", source.Id);
                 return null;
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
@@ -1614,6 +1682,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     public Task QueueLibraryScanAsync(ProbeMode mode)
     {
         Interlocked.Exchange(ref _isBatchRunning, 1);
+        EnsureConsumerRunning();
         if (Interlocked.CompareExchange(ref _isScanningLibrary, 1, 0) != 0)
         {
             _logger.LogInformation("QuickSTRM: Library scan is already running; skipping duplicate scan request");
@@ -1648,9 +1717,20 @@ public sealed class ProbeService : IHostedService, IDisposable
     internal static int ScanPageSize { get; set; } = 5000;
     internal static int ScanPacingDelayMs { get; set; } = 0;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool IsStrmFile(string? path)
+    {
+        return path is not null && path.Length >= 5 &&
+            path[^5] == '.' &&
+            (path[^4] | 0x20) == 's' &&
+            (path[^3] | 0x20) == 't' &&
+            (path[^2] | 0x20) == 'r' &&
+            (path[^1] | 0x20) == 'm';
+    }
+
     /// <summary>
     /// Vectorized/fast single-pass unprobed item identification for massive libraries.
-    /// Evaluates RunTimeTicks and dimensions in $O(1)$ without object instantiation.
+    /// Evaluates dimensions in $O(1)$ without object instantiation.
     /// </summary>
     internal static List<BaseItem> IdentifyUnprobedItems(IReadOnlyList<BaseItem> items, bool isIncremental = true)
     {
@@ -1670,18 +1750,12 @@ public sealed class ProbeService : IHostedService, IDisposable
                 for (var i = start; i < end; i++)
                 {
                     var item = array[i];
-                    if (isIncremental && (item.RunTimeTicks.GetValueOrDefault() > 0 || (item.Width > 0 && item.Height > 0)))
+                    if (isIncremental && item.Width > 0 && item.Height > 0)
                     {
                         continue;
                     }
 
-                    var path = item.Path;
-                    if (path is not null && path.Length >= 5 &&
-                        path[^5] == '.' &&
-                        (path[^4] | 0x20) == 's' &&
-                        (path[^3] | 0x20) == 't' &&
-                        (path[^2] | 0x20) == 'r' &&
-                        (path[^1] | 0x20) == 'm')
+                    if (IsStrmFile(item.Path))
                     {
                         localList.Add(item);
                     }
@@ -1712,18 +1786,12 @@ public sealed class ProbeService : IHostedService, IDisposable
         for (var i = 0; i < count; i++)
         {
             var item = items[i];
-            if (isIncremental && (item.RunTimeTicks.GetValueOrDefault() > 0 || (item.Width > 0 && item.Height > 0)))
+            if (isIncremental && item.Width > 0 && item.Height > 0)
             {
                 continue;
             }
 
-            var path = item.Path;
-            if (path is not null && path.Length >= 5 &&
-                path[^5] == '.' &&
-                (path[^4] | 0x20) == 's' &&
-                (path[^3] | 0x20) == 't' &&
-                (path[^2] | 0x20) == 'r' &&
-                (path[^1] | 0x20) == 'm')
+            if (IsStrmFile(item.Path))
             {
                 unprobed.Add(item);
             }
@@ -1735,6 +1803,12 @@ public sealed class ProbeService : IHostedService, IDisposable
     internal async Task ScanAndQueueLibraryAsync(ProbeMode mode)
     {
         var isIncremental = mode == ProbeMode.Incremental || mode == ProbeMode.OnlyUnprobed;
+        if (!isIncremental)
+        {
+            _failedPersistCache.Clear();
+            ClearResolvedUrlCache();
+        }
+
         var offset = 0;
         var pageSize = ScanPageSize;
         var enqueuedCount = 0;
@@ -1759,22 +1833,45 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
 
             var unprobedBatch = IdentifyUnprobedItems(batch, isIncremental);
+            var batchEnqueued = 0;
             for (var i = 0; i < unprobedBatch.Count; i++)
             {
                 var item = unprobedBatch[i];
-                if (isIncremental && _mediaSourceManager != null)
+                if (isIncremental)
                 {
-                    var streams = _mediaSourceManager.GetMediaStreams(item.Id);
-                    if (streams != null && streams.Count > 0)
+                    if (item.Width > 0 && item.Height > 0)
                     {
-                        continue;
+                        if (_inMemoryStreams.TryGetValue(item.Id, out var cachedStreams) &&
+                            !cachedStreams.Any(s => s.Type == MediaStreamType.Audio))
+                        {
+                            // Missing audio stream in cached streams, do not skip!
+                        }
+                        else
+                        {
+                            continue;
+                        }
+                    }
+
+                    if (_mediaSourceManager != null)
+                    {
+                        var streams = _mediaSourceManager.GetMediaStreams(item.Id);
+                        if (streams != null && streams.Count > 0 && streams.Any(s => s.Type == MediaStreamType.Audio))
+                        {
+                            continue;
+                        }
                     }
                 }
 
                 if (EnqueueBackgroundPersist(item, highPriority: false, force: !isIncremental))
                 {
                     enqueuedCount++;
+                    batchEnqueued++;
                 }
+            }
+
+            if (batchEnqueued > 0)
+            {
+                EnsureConsumerRunning();
             }
 
             offset += batch.Count;
@@ -1805,7 +1902,13 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// <summary>
     /// Starts a probe task. Returns false if one is already running.
     /// </summary>
-    /// <param name="mode">"Incremental" or "Full".</param>
+    public bool StartProbe(ProbeMode mode)
+        => StartProbe(mode.ToString());
+
+    /// <summary>
+    /// Starts a probe task. Returns false if one is already running.
+    /// </summary>
+    /// <param name="mode">"Incremental", "Full", "FullRefresh", or "All".</param>
     public bool StartProbe(string mode)
     {
         lock (_lock)
@@ -1815,8 +1918,17 @@ public sealed class ProbeService : IHostedService, IDisposable
                 return false;
             }
 
+            var isIncremental = string.Equals(mode, "Incremental", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(mode, "OnlyUnprobed", StringComparison.OrdinalIgnoreCase);
+
+            if (!isIncremental)
+            {
+                _failedPersistCache.Clear();
+                ClearResolvedUrlCache();
+            }
+
             var items = GetStrmItems();
-            if (string.Equals(mode, "Incremental", StringComparison.OrdinalIgnoreCase))
+            if (isIncremental)
             {
                 items = items.Where(i => !HasStreamInfo(i)).ToList();
             }
@@ -2012,15 +2124,108 @@ public sealed class ProbeService : IHostedService, IDisposable
         var probeOk = false;
         try
         {
-            // protects low-end CPUs: only background work uses the heavy RefreshMetadata path; playback never waits on it
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-            // cheap HEAD check BEFORE waiting for / holding a gate slot, so dead links never occupy one of the 2 ffprobe slots;
-            // it passes the trial forward without changing the circuit state - only a full ffprobe success may close it
-            if (!await PreflightCoreAsync(item, ct).ConfigureAwait(false))
+            string? targetUrl;
+            try
             {
+                targetUrl = await ReadStrmUrlAsync(item.Path, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                var failureKind = FailureKind.TemporaryFailure;
+                if (ex is FileNotFoundException && IsParentDirectoryReadable(item.Path))
+                {
+                    failureKind = FailureKind.PermanentFailure;
+                }
+                else if (ex is not (FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException))
+                {
+                    _logger.LogWarning(ex, "QuickSTRM: Cannot read .strm file {Path}", item.Path);
+                    return true;
+                }
+
+                _logger.LogWarning(
+                    ex,
+                    "QuickSTRM: .strm file unavailable for {Name}: {Path} ({Kind})",
+                    item.Name,
+                    item.Path,
+                    failureKind);
+                MarkPersistFailed(item);
+                HandleFailure(item, failureKind);
                 trial.Success = false;
                 return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(targetUrl))
+            {
+                MarkPersistFailed(item);
+                trial.Success = false;
+                return false;
+            }
+
+            var isHttp = targetUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                         targetUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+            var protocol = isHttp ? MediaProtocol.Http : MediaProtocol.File;
+
+            if (isHttp)
+            {
+                // Strict 8-second CancellationTokenSource on HTTP preflight / socket connection phase
+                using var preflightCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                using var linkedPreflight = CancellationTokenSource.CreateLinkedTokenSource(ct, preflightCts.Token);
+
+                await _headGate.WaitAsync(linkedPreflight.Token).ConfigureAwait(false);
+                HttpPreflightResult httpResult;
+                try
+                {
+                    var uri = new Uri(targetUrl);
+                    httpResult = await CheckHttpEndpointWithHoldOpenRetryAsync(uri, linkedPreflight.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    ReleaseQuietly(_headGate);
+                }
+
+                if (!httpResult.IsHealthy)
+                {
+                    _logger.LogWarning(
+                        "QuickSTRM: Pre-flight check failed after hold-open retries for {Name}; status {Status} ({Kind})",
+                        item.Name,
+                        httpResult.StatusCode,
+                        httpResult.FailureKind);
+
+                    trial.Success = false;
+                    MarkPersistFailed(item);
+                    HandleFailure(item, httpResult.FailureKind);
+                    return false;
+                }
+            }
+            else
+            {
+                // Local or mounted VFS file path (e.g., /mnt/... or \\...)
+                if (!File.Exists(targetUrl))
+                {
+                    var localExists = false;
+                    foreach (var delay in HoldOpenRetryDelays)
+                    {
+                        await Task.Delay(delay, ct).ConfigureAwait(false);
+                        if (File.Exists(targetUrl))
+                        {
+                            localExists = true;
+                            break;
+                        }
+                    }
+
+                    if (!localExists)
+                    {
+                        _logger.LogWarning(
+                            "QuickSTRM: Local .strm target missing after hold-open retry window for {Name}: {Url} (treated as temporary; possible dropped mount)",
+                            item.Name,
+                            targetUrl);
+                        trial.Success = false;
+                        MarkPersistFailed(item);
+                        HandleFailure(item, FailureKind.TemporaryFailure);
+                        return false;
+                    }
+                }
             }
 
             try
@@ -2034,56 +2239,98 @@ public sealed class ProbeService : IHostedService, IDisposable
 
             try
             {
-                // lets the persistence queue distinguish items waiting for a slot from items actually probing (inside the try so the
-                // matching release below always runs, even if this callback were ever to throw)
                 onSlotAcquired?.Invoke();
-                // protects bulk imports: the 60s clock starts only once we hold a slot, so queue time can't cause false timeouts
-                timeoutCts.CancelAfter(timeout);
 
-                // Hardened FFprobe Killswitch: 8-second strict timeout on probe execution
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cts.Token);
+                // Dedicated 25-second timeout for GetMediaInfo so cold Usenet/InfiniDysk streams have time
+                using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+                using var linkedProbe = CancellationTokenSource.CreateLinkedTokenSource(ct, probeCts.Token);
 
-                // NOTE: this plugin does not launch ffprobe itself. RefreshMetadata -> Jellyfin's IMediaEncoder starts the process
-                // and ties it to this token. We cancel the token rather than holding a Process handle we do not own.
-                await item.RefreshMetadata(
-                    new MetadataRefreshOptions(_directoryService)
+                var mediaSource = new MediaSourceInfo
+                {
+                    Id = item.Id.ToString("N"),
+                    Path = targetUrl,
+                    Protocol = protocol,
+                    Type = MediaSourceType.Default,
+                    Container = Path.GetExtension(targetUrl).TrimStart('.')
+                };
+
+                var mediaInfo = await _mediaEncoder.GetMediaInfo(
+                    new MediaInfoRequest
                     {
-                        EnableRemoteContentProbe = true,
-                        MetadataRefreshMode = MetadataRefreshMode.FullRefresh
+                        MediaSource = mediaSource,
+                        MediaType = DlnaProfileType.Video,
+                        ExtractChapters = false
                     },
-                    linkedCts.Token).ConfigureAwait(false);
+                    linkedProbe.Token).ConfigureAwait(false);
+
+                if (mediaInfo is not null)
+                {
+                    var videoStream = mediaInfo.MediaStreams?.FirstOrDefault(s => s.Type == MediaStreamType.Video);
+                    if (videoStream is not null)
+                    {
+                        if (videoStream.Width.HasValue && videoStream.Width.Value > 0)
+                        {
+                            item.Width = videoStream.Width.Value;
+                        }
+
+                        if (videoStream.Height.HasValue && videoStream.Height.Value > 0)
+                        {
+                            item.Height = videoStream.Height.Value;
+                        }
+                    }
+
+                    if (mediaInfo.RunTimeTicks.HasValue && mediaInfo.RunTimeTicks.Value > 0)
+                    {
+                        item.RunTimeTicks = mediaInfo.RunTimeTicks.Value;
+                    }
+
+                    if (!string.IsNullOrEmpty(mediaInfo.Container))
+                    {
+                        item.Container = mediaInfo.Container;
+                    }
+
+                    var streams = mediaInfo.MediaStreams?.ToList() ?? new List<MediaStream>();
+                    _inMemoryStreams[item.Id] = streams;
+
+                    _itemRepository.SaveMediaStreams(item.Id, streams, CancellationToken.None);
+
+                    try
+                    {
+                        await item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "QuickSTRM: item.UpdateToRepositoryAsync failed for {Name}; falling back to UpdateItem", item.Name);
+                        _itemRepository.UpdateItem(item);
+                    }
+                }
+
                 probeOk = HasStreamInfo(item);
                 if (probeOk)
                 {
                     ApplyTrickplayPrevention(item);
                 }
-                return true;
+                return probeOk;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                // Hardened FFprobe Killswitch: treat link as dead/unreachable, abort database save
-                _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 8s for {Name}; treating link as dead/unreachable and aborting DB save", item.Name);
+                _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after 25s for {Name}; treating link as dead/unreachable and aborting DB save", item.Name);
                 return false;
             }
             finally
             {
-                // protects low-end CPUs: always release the slot (even on error/cancel) so the 2-slot limit can't leak shut
                 onSlotReleased?.Invoke();
                 ReleaseQuietly(_probeGate);
 
-                // slot is already free here, so failure handling (file/library deletion) never holds an ffprobe slot; it is fully guarded so
-                // a fault here can never mask the real result or escape the pipeline
                 try
                 {
                     if (probeOk)
                     {
                         RecordSuccess();
-                        trial.Success = true; // populated stream info = full end-to-end success
+                        trial.Success = true;
                     }
                     else if (!ct.IsCancellationRequested)
                     {
-                        // timeouts, exceptions and empty/invalid ffprobe results are always temporary: never deletes anything
                         trial.Success = false;
                         MarkPersistFailed(item);
                         HandleFailure(item, FailureKind.TemporaryFailure);
@@ -2118,11 +2365,10 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     private static bool IsStrmItem(BaseItem item)
-        => item.Path is not null
-           && item.Path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase);
+        => IsStrmFile(item.Path);
 
     private static bool HasStreamInfo(BaseItem item)
-        => item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0;
+        => item.Width > 0 && item.Height > 0;
 
     // a slot holder finishing after Dispose must not throw ObjectDisposedException out of a finally block
     private static void ReleaseQuietly(SemaphoreSlim gate)
@@ -2214,6 +2460,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 public static class ItemRepositoryExtensions
 {
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo?> CachedUpdateMethods = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo?> CachedSaveMediaStreamsMethods = new();
 
     /// <summary>
     /// Persists item metadata changes to the repository or database.
@@ -2234,6 +2481,57 @@ public static class ItemRepositoryExtensions
             }
         }
 
-        item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None).GetAwaiter().GetResult();
+        try
+        {
+            item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>
+    /// Persists media stream descriptors directly to Jellyfin's SQLite database via IItemRepository.SaveMediaStreams.
+    /// </summary>
+    public static void SaveMediaStreams(this IItemRepository? repository, Guid itemId, IReadOnlyList<MediaStream> streams, CancellationToken cancellationToken = default)
+    {
+        if (repository is null)
+        {
+            return;
+        }
+
+        var repoType = repository.GetType();
+        var saveMethod = CachedSaveMediaStreamsMethods.GetOrAdd(repoType, t =>
+            t.GetMethod("SaveMediaStreams", BindingFlags.Public | BindingFlags.Instance));
+
+        if (saveMethod is not null)
+        {
+            var parameters = saveMethod.GetParameters();
+            object?[] args;
+            if (parameters.Length == 3)
+            {
+                args = new object?[] { itemId, streams, cancellationToken };
+            }
+            else if (parameters.Length == 2)
+            {
+                args = new object?[] { itemId, streams };
+            }
+            else
+            {
+                return;
+            }
+
+            try
+            {
+                var result = saveMethod.Invoke(repository, args);
+                if (result is Task task)
+                {
+                    task.GetAwaiter().GetResult();
+                }
+            }
+            catch
+            {
+            }
+        }
     }
 }

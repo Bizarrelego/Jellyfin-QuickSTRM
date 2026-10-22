@@ -956,8 +956,8 @@
                 progBar.classList.add('indeterminate');
             }
 
-            // 5. POST /QuickStrm/Probe/Start
-            apiPost('QuickStrm/Probe/Start?mode=' + encodeURIComponent(mode), { Scope: mode, Mode: mode })
+            // 5. POST /QuickStrm/Probe
+            apiPost('QuickStrm/Probe?mode=' + encodeURIComponent(mode), JSON.stringify({ Mode: mode }))
                 .then(function (result) {
                     if (typeof Dashboard !== 'undefined' && typeof Dashboard.hideLoadingMsg === 'function') {
                         Dashboard.hideLoadingMsg();
