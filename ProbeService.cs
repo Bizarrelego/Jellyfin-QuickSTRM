@@ -98,9 +98,14 @@ public sealed class ProbeService : IHostedService, IDisposable
     // in-flight probe coalescing to avoid duplicate ffprobe or hold-open loops across concurrent callers
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, Task<bool>> _inflightProbes = new();
 
-    // absolute expiration: entry expires exactly 1 hour after failure regardless of how often it is queried;
-    // prevents perpetual lockouts from automated client retries continuously resetting a sliding window
-    private static readonly TimeSpan FailedPersistAbsoluteExpiration = TimeSpan.FromHours(1);
+    // Concurrency throttle preventing more than 4 concurrent ffprobe streams against Usenet sockets / Kestrel thread pool
+    private static readonly SemaphoreSlim _probeThrottle = new(4, 4);
+
+    // Active probe item names currently inside the probe throttle
+    private readonly ConcurrentDictionary<Guid, string> _activeProbeNames = new();
+
+    /// <summary>Gets the names of items currently being actively probed inside the concurrency throttle.</summary>
+    public IReadOnlyCollection<string> ActiveProbeNames => _activeProbeNames.Values.ToArray();
 
     // Consecutive failure retry count per item across probe passes (3-strike state machine)
     private readonly ConcurrentDictionary<Guid, int> _itemRetryCounts = new();
@@ -173,9 +178,8 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// <summary>Gets the number of items currently in the negative failure cache.</summary>
     public int FailureCacheCount => _failedPersistCache.Count;
 
-    // protects low-end CPUs (e.g. Core i3): hard ceiling of exactly 2 concurrent ffprobe-backed refreshes across ALL callers
-    // (bulk, auto-probe and inline), so probes can never exceed the 2 threads we can spare without starving playback
-    public const int MaxConcurrentProbes = 2;
+    // protects playback & socket starvation: hard ceiling of 4 concurrent ffprobe-backed refreshes across ALL callers
+    public const int MaxConcurrentProbes = 4;
     private readonly SemaphoreSlim _probeGate = new(MaxConcurrentProbes, MaxConcurrentProbes);
 
     // protects bulk imports: generous 60s lets slow cloud-drive links finish without failing the library scan
@@ -493,23 +497,35 @@ public sealed class ProbeService : IHostedService, IDisposable
                 continue;
             }
 
-            // Immediately increment _activeProbes on consumer loop thread BEFORE probe task execution
-            Interlocked.Increment(ref _activeProbes);
+            if (!TryEnterCircuit(out var isTrial))
+            {
+                await Task.Delay(1000, ct).ConfigureAwait(false);
+                continue;
+            }
+
             try
             {
-                var attempt = await ProbeItemAsync(
+                await _probeThrottle.WaitAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                _pendingPersist.TryRemove(item.Id, out _);
+                break;
+            }
+
+            Interlocked.Increment(ref _activeProbes);
+            var itemName = item.Name ?? item.Path ?? "Unknown";
+            _activeProbeNames[item.Id] = itemName;
+            try
+            {
+                var mediaInfo = await ExecuteCoreProbeAsync(
                     item,
                     BackgroundProbeTimeout,
                     ct).ConfigureAwait(false);
 
-                if (attempt == ProbeAttempt.SkippedDueToTrial)
+                if (isTrial)
                 {
-                    continue;
-                }
-
-                if (attempt != ProbeAttempt.Completed || !HasStreamInfo(item))
-                {
-                    MarkPersistFailed(item);
+                    ResolveTrial(mediaInfo is not null && HasStreamInfo(item));
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -519,12 +535,17 @@ public sealed class ProbeService : IHostedService, IDisposable
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "QuickSTRM: Background persist failed for {Name}", item.Name);
-                MarkPersistFailed(item);
+                if (isTrial)
+                {
+                    ResolveTrial(false);
+                }
             }
             finally
             {
+                _activeProbeNames.TryRemove(item.Id, out _);
                 _pendingPersist.TryRemove(item.Id, out _);
                 Interlocked.Decrement(ref _activeProbes);
+                _probeThrottle.Release();
                 if (Volatile.Read(ref _activeProbes) == 0 &&
                     _highPriorityChannel.Reader.Count == 0 &&
                     _lowPriorityChannel.Reader.Count == 0 &&
@@ -1133,7 +1154,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 item.Name,
                 item.Path,
                 failureKind);
-            MarkPersistFailed(item);
+            _failedPersistCache[item.Id] = DateTime.UtcNow.Add(TimeSpan.FromMinutes(15));
             HandleFailure(item, failureKind);
             return false;
         }
@@ -1166,7 +1187,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
 
             _logger.LogWarning("QuickSTRM: Local .strm target missing after hold-open retry window for {Name}: {Url} (treated as temporary; possible dropped mount)", item.Name, url);
-            MarkPersistFailed(item);
+            _failedPersistCache[item.Id] = DateTime.UtcNow.Add(TimeSpan.FromMinutes(15));
             HandleFailure(item, FailureKind.TemporaryFailure);
             return false;
         }
@@ -1193,7 +1214,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 result.StatusCode,
                 result.FailureKind);
 
-            MarkPersistFailed(item);
+            _failedPersistCache[item.Id] = DateTime.UtcNow.Add(TimeSpan.FromMinutes(15));
             HandleFailure(item, result.FailureKind);
             return false;
         }
@@ -1445,18 +1466,6 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             _logger.LogError(ex, "QuickSTRM: Auto-delete failed for {Name}", item.Name);
         }
-    }
-
-    private void MarkPersistFailed(BaseItem item)
-    {
-        // prevents perpetual lockouts from automated client retries: absolute expiration of exactly 1 hour is enforced instead
-        // of a sliding window, so background client requests or automated retries cannot continuously postpone the retry opportunity
-        _failedPersistCache[item.Id] = DateTime.UtcNow.Add(FailedPersistAbsoluteExpiration);
-
-        _logger.LogWarning(
-            "QuickSTRM: Background persist failed for {Name}; negative cache set with {Hours}h absolute expiration (prevents perpetual lockout)",
-            item.Name,
-            FailedPersistAbsoluteExpiration.TotalHours);
     }
 
     /// <summary>

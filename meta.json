@@ -3,7 +3,7 @@
   "name": "QuickSTRM",
   "description": "Eliminates remote ffprobe latency with instant-start playback, native self-cleaning auto-heal list feeds, and low-power hardware safeguards.",
   "overview": "Instant-start playback & native auto-heal feeds for .strm libraries",
-  "version": "4.2.1",
+  "version": "4.2.2",
   "targetAbi": "12.2.0.0",
   "owner": "Bizarrelego",
   "category": "General",

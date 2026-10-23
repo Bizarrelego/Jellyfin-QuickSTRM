@@ -36,6 +36,7 @@ public class TelemetryService : IDisposable
     public int DeletedCount => Volatile.Read(ref _deletedCount);
 
     public void IncrementProbed() => Interlocked.Increment(ref _probedCount);
+    public void SetProbedCount(int count) => Volatile.Write(ref _probedCount, count);
     public void IncrementPrewarmed() => Interlocked.Increment(ref _prewarmedCount);
     public void IncrementHealed() => Interlocked.Increment(ref _healedCount);
     public void IncrementDeleted() => Interlocked.Increment(ref _deletedCount);

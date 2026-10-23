@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.2] - 2026-10-22
+
+### 🚦 Strict Concurrency Throttling, Persistent Database Metrics & Live Active Probe Tracking
+
+Targeted stability, performance, and monitoring release introducing strict probe concurrency throttling to prevent Usenet socket saturation and thread starvation, purging the legacy 1-hour negative cache fallback in favor of the 3-strike state machine, persisting real SQLite stream metrics across server restarts, and surfacing live probe filenames in the dashboard UI.
+
+### Added
+- **Strict Concurrency Throttling (`ProbeService.cs`)**:
+  - Implemented static `SemaphoreSlim _probeThrottle = new(4, 4)` in the background queue consumer loop.
+  - Prevents queue workers from exceeding 4 concurrent `ffprobe` processes, eliminating Usenet socket pool exhaustion and preventing Jellyfin Kestrel thread starvation during heavy library imports.
+  - Releases throttle slots reliably in `finally` blocks even during task cancellation or circuit breaker trips.
+- **Live Active Probe Names (`ProbeService.cs`, `QuickStrmController.cs` & `configPage.js`)**:
+  - Added thread-safe `ConcurrentDictionary<Guid, string> _activeProbeNames` tracking media items currently holding an active probe slot.
+  - Exposed `string[] ActiveProbes` array in `Queue` payload of `GET /QuickStrm/Dashboard` and `GET /QuickStrm/Status`.
+  - Updated dashboard UI to render real-time comma-separated active probe titles (`"Probing: Title1, Title2"`) with CSS text-overflow ellipsis truncation.
+- **Automated Concurrency & Active Probe Tracking Tests (`ProbeExecutionTests.cs`)**:
+  - Added `QueueConsumer_ThrottlesConcurrencyToAtMost4_AndExposesActiveProbeNames` to verify strict concurrency capping in `[1, 4]` and active probe name collection draining to 0 upon completion.
+
+### Changed
+- **Persistent "Has Stream Info" Health Metric (`QuickStrmController.cs` & `TelemetryService.cs`)**:
+  - Replaced transient in-memory session counter with dynamic library calculation: `ProbedCount = TotalStrmCount - UnprobedStrmCount`.
+  - Guarantees the dashboard probed metric survives restarts, cache flushes, and reflects true SQLite database health.
+  - Added `SetProbedCount` to `TelemetryService` for programmatic state synchronization.
+- **Purged Legacy 1-Hour Negative Cache Fallback (`ProbeService.cs`)**:
+  - Completely purged legacy `MarkPersistFailed` and `FailedPersistAbsoluteExpiration` 1-hour negative cache overrides.
+  - Ensures all `TimeoutException`, `HttpRequestException`, `FfmpegException`, and file access failures are captured strictly by the bounded 3-strike state machine with 15-minute retry intervals.
+
+---
 ## [4.2.1] - 2026-10-22
 
 ### 🛡️ Bounded 3-Strike Auto-Heal Retry Pipeline & Sweeper Integration

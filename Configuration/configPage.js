@@ -563,7 +563,7 @@
             if (lblQueue) { lblQueue.textContent = queueCount + activeCount; }
             if (lblQueueDetail) { lblQueueDetail.textContent = queueCount + ' waiting / ' + activeCount + ' running'; }
             if (metricQueueDepth) { metricQueueDepth.textContent = queueCount; }
-            if (metricActiveProbes) { metricActiveProbes.textContent = activeCount + ' / 2'; }
+            if (metricActiveProbes) { metricActiveProbes.textContent = activeCount + ' / 4'; }
 
             // Ledger entries if present
             var ledgerEntries = t.Ledger || t.ledger;
@@ -600,8 +600,28 @@
                         if (lblStatus) { lblStatus.textContent = 'Status: Running'; lblStatus.style.color = ''; }
                     }
                 }
+                var activeProbes = q.ActiveProbes || q.activeProbes || [];
+                if (probeItemText) {
+                    probeItemText.style.whiteSpace = 'nowrap';
+                    probeItemText.style.overflow = 'hidden';
+                    probeItemText.style.textOverflow = 'ellipsis';
+                }
                 if (lblCurrentItem) {
-                    lblCurrentItem.textContent = activeCount > 0 ? (activeCount + ' active probe(s)') : '-';
+                    if (Array.isArray(activeProbes) && activeProbes.length > 0) {
+                        lblCurrentItem.textContent = activeProbes.join(', ');
+                    } else if (activeCount > 0) {
+                        lblCurrentItem.textContent = activeCount + ' active probe(s)';
+                    } else {
+                        lblCurrentItem.textContent = '-';
+                    }
+                } else if (probeItemText) {
+                    if (Array.isArray(activeProbes) && activeProbes.length > 0) {
+                        probeItemText.textContent = 'Probing: ' + activeProbes.join(', ');
+                    } else if (activeCount > 0) {
+                        probeItemText.textContent = 'Probing: ' + activeCount + ' active probe(s)';
+                    } else {
+                        probeItemText.textContent = 'Probing: -';
+                    }
                 }
             } else {
                 restoreProbeButton();
@@ -619,6 +639,8 @@
                 }
                 if (lblCurrentItem) {
                     lblCurrentItem.textContent = '-';
+                } else if (probeItemText) {
+                    probeItemText.textContent = 'Probing: -';
                 }
             }
 

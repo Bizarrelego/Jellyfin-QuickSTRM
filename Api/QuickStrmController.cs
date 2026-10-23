@@ -78,6 +78,7 @@ public class QuickStrmController : ControllerBase
                 ScanningLibrary = isScanning,
                 QueueCount = _probeService.HighPriorityQueueWaiting + _probeService.LowPriorityQueueWaiting,
                 ActiveCount = _probeService.ActiveCount,
+                ActiveProbes = _probeService.ActiveProbeNames.ToArray(),
                 TotalQueued = _probeService.TotalItems,
                 CompletedCount = _probeService.ProcessedItems,
                 CircuitState = _probeService.CircuitState,
@@ -86,7 +87,7 @@ public class QuickStrmController : ControllerBase
             },
             Telemetry = new
             {
-                ProbedCount = _telemetryService.ProbedCount,
+                ProbedCount = Math.Max(0, totalStrm - unprobedStrm),
                 PrewarmedCount = _telemetryService.PrewarmedCount,
                 HealedCount = _telemetryService.HealedCount,
                 DeletedCount = _telemetryService.DeletedCount,
@@ -128,7 +129,7 @@ public class QuickStrmController : ControllerBase
 
         return Ok(new
         {
-            ProbedCount = _telemetryService.ProbedCount,
+            ProbedCount = Math.Max(0, totalStrm - unprobedStrm),
             PrewarmedCount = _telemetryService.PrewarmedCount,
             HealedCount = _telemetryService.HealedCount,
             DeletedCount = _telemetryService.DeletedCount,
@@ -255,6 +256,7 @@ public class QuickStrmController : ControllerBase
             CurrentItemName = _probeService.CurrentItemName,
             CurrentItem = _probeService.CurrentItemName,
             ActiveProbes = _probeService.ActiveProbes,
+            ActiveProbeNames = _probeService.ActiveProbeNames.ToArray(),
             MaxConcurrentProbes = ProbeService.MaxConcurrentProbes
         });
     }
