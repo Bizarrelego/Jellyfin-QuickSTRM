@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.9] - 2026-10-23
+
+### 🛡️ StreamingHelpers Transcoder Crash Elimination & Native Source Fallback
+
+Critical stability release eliminating the `ArgumentOutOfRangeException` crash in Jellyfin's `StreamingHelpers.GetStreamingState` during HLS video playlist generation (`/videos/{itemId}/master.m3u8`) by ensuring `MediaSourceInterceptor` never returns empty media source collections to Jellyfin, allowing unprobed streams and external subtitles to coexist seamlessly, and enforcing strictly validated default audio/subtitle index pointers.
+
+### Added
+- **Sanitized Native Fallback (`MediaSourceInterceptor.cs`)**:
+  - Replaced all fallback returns of `Array.Empty<MediaSourceInfo>()` with sanitized native `MediaSourceInfo` objects.
+  - Guarantees `GetPlaybackMediaSources` always supplies a valid source list so Jellyfin's internal `StreamingHelpers.GetStreamingState` never crashes on `mediaSources[0]`.
+  - Unprobed or pending items return with container normalized (`mkv`/`mp4`), protocol set (`Http`), and default stream indices set safely to `null`, allowing FFmpeg and Jellyfin's native pipeline to resolve the stream directly.
+- **External Subtitle & Video Stream Coexistence (`MediaSourceInterceptor.EnsureStreamCapabilities`)**:
+  - Fixed an issue where pre-existing external subtitle tracks in SQLite blocked newly probed video and audio streams from being attached.
+  - Merges probed video and audio streams alongside existing subtitle tracks, ensuring `HasCompleteMediaStreams` succeeds.
+- **Robust 3-Step Pointer Sanitization (`MediaSourceInterceptor.SanitizeDefaultStreamIndices`)**:
+  - Resolves target audio/subtitle streams first, normalizes stream indices sequentially to `0, 1, 2...`, and verifies `DefaultAudioStreamIndex` and `DefaultSubtitleStreamIndex` point to in-bounds elements matching `MediaStreamType.Audio` and `MediaStreamType.Subtitle` (or `null`).
+- **Automated Fallback & Index Integrity Tests (`MediaSourceInterceptorTests.cs`)**:
+  - Added unit test `GetPlaybackMediaSources_UnprobedItem_InlineProbeFails_ReturnsSanitizedNativeSource` verifying unprobed streams return a sanitized single-item source list with null default pointers instead of an empty collection.
+
+---
 ## [4.2.8] - 2026-10-23
 
 ### 🚀 Inline On-Demand Probing Resilience & Coalesced In-Flight Stream Resolution
