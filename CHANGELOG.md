@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.4] - 2026-10-22
+
+### ⚡ Non-Blocking Concurrent Queue Processing & Offloaded FFprobe Execution
+
+Critical responsiveness and concurrency release resolving synchronous thread-blocking that starved Kestrel HTTP threads during dead-link timeouts, while unblocking the background queue consumer loop to execute up to 4 probes concurrently via `Task.Run`.
+
+### Added
+- **Asynchronous Concurrent Queue Dispatch (`ProbeService.cs`)**:
+  - Refactored background consumer loop to dispatch probe executions onto worker threads via `Task.Run` after acquiring `_probeThrottle`.
+  - Enables the consumer loop to immediately dequeue subsequent items and run exactly 4 concurrent probes without waiting on 25-second dead-link timeouts.
+- **Offloaded FFmpeg Execution (`ProbeService.cs`)**:
+  - Wrapped `_mediaEncoder.GetMediaInfo` in `Task.Run` within `ExecuteCoreProbeAsync`.
+  - Forces synchronous process execution and socket I/O off Jellyfin's core thread pool, preventing UI and connected client freezes during slow Usenet or cloud mount responses.
+
+### Changed
+- **Guaranteed Throttle Release Lifecycle (`ProbeService.cs`)**:
+  - Ensured `_probeThrottle.Release()`, active probe eviction, and batch state evaluations are strictly managed inside background task `finally` blocks.
+
+---
 ## [4.2.2] - 2026-10-22
 
 ### 🚦 Strict Concurrency Throttling, Persistent Database Metrics & Live Active Probe Tracking
