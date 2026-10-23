@@ -12,8 +12,8 @@
         "changelog": "\ud83d\ude80 Decoupled Probe Initiation & Deadlock-Free Semaphore Management\nPerformance and stability release eliminating synchronous Kestrel deadlocks during pre-probe initiation by completely decoupling HTTP request threads from library scans, alongside guaranteed asynchronous semaphore throttling in the background consumer loop.\nAdded\n- **Instant Decoupled Pre-Probe Endpoint (`QuickStrmController.cs`)**:\n  - Decoupled `POST /QuickStrm/Probe/Start` and `POST /QuickStrm/Probe` from `QueueLibraryScanAsync` using `Task.Run` background dispatch.\n  - Returns `200 OK` (`{ Success = true, Message = \"Scan initiated\" }`) immediately in `< 1ms`, completely preventing Kestrel thread starvation and client UI freezing during long SQLite metadata scans.\nChanged\n- **Hardened Semaphore Throttling Lifecycle (`ProbeService.cs`)**:\n  - Enforced strictly asynchronous `await _probeThrottle.WaitAsync(ct).ConfigureAwait(false)` in the consumer loop with guaranteed `_probeThrottle.Release()` in background task `finally` blocks.\n  - Added dispatch-level exception guards ensuring semaphore slots are immediately released if background task scheduling encounters unexpected exceptions.",
         "targetAbi": "12.2.0.0",
         "sourceUrl": "https://github.com/Bizarrelego/Jellyfin-QuickSTRM/releases/download/v4.2.5/QuickSTRM.zip",
-        "checksum": "",
-        "timestamp": "2026-10-23T02:56:19Z"
+        "checksum": "33ACB4D2A964C81B3A33742B9694A841",
+        "timestamp": "2026-10-23T03:04:58Z"
       },
       {
         "version": "4.2.4",
