@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.6] - 2026-10-22
+
+### 🎬 Playback Contention Elimination & Stream Pipeline Integrity
+
+Critical bugfix release resolving .strm playback failures by eliminating concurrent socket contention between VfsPrewarmService and Infinidysk/upstream Usenet servers, guaranteeing unprobed items fall back cleanly to native Jellyfin handling without corrupted MediaSourceInfo objects, normalizing container strings, and bypassing background concurrency throttles for inline playback probes.
+
+### Added
+- **Active Pre-Warm Cancellation Tracking (`VfsPrewarmService.cs`, `PredictivePrewarmMiddleware.cs`, `SessionMonitorService.cs`)**:
+  - Added thread-safe `ConcurrentDictionary<string, CancellationTokenSource> _activePrewarms` and `CancelPrewarm(string itemId)` in `VfsPrewarmService`.
+  - As soon as actual playback or `PlaybackInfo` is requested for an item, in-flight prewarm HTTP requests for that item are immediately cancelled to grant FFmpeg and Jellyfin exclusive socket access.
+  - Automatically cancels active prewarm requests in `SessionMonitorService.OnPlaybackStart`.
+- **MediaSourceInterceptor Validation Tests (`MediaSourceInterceptorTests.cs`, `VfsPrewarmTests.cs`)**:
+  - Added test coverage for container normalization, complete audio/video codec enforcement, native pipeline fallback on unprobed items, and immediate in-flight prewarm cancellation.
+
+### Changed
+- **Zero-Contention Pre-Warming Bounds (`VfsPrewarmService.cs` & `PredictivePrewarmMiddleware.cs`)**:
+  - Reduced predictive pre-warm byte range from 5MB (`5,242,880` bytes) to 512KB (`524,288` bytes), immediately disposing `HttpResponseMessage` and content stream to return sockets back to the pool.
+  - Restricted pre-warming exclusively to hover/detail page browsing (`ItemDetailRegex`), explicitly ignoring `/PlaybackInfo`, `/stream`, and `/Videos/` requests.
+- **Fail-Safe Native .strm Fallback (`MediaSourceInterceptor.cs`)**:
+  - Enforced `HasCompleteMediaStreams` requiring at least one video stream with a valid `Codec` AND at least one audio stream with a valid `Codec`.
+  - If an item does not have complete streams, `GetPlaybackMediaSources` returns `Enumerable.Empty<MediaSourceInfo>()` so Jellyfin's native playback pipeline resolves the `.strm` file without interference from half-populated objects.
+  - Resolved `MediaSourceInfo` properties strictly normalized: `Protocol = MediaProtocol.Http` for HTTP(S) URLs, `Protocol = MediaProtocol.File` for local paths, `RequiresOpening = false`, `SupportsProbing = true`, `Container` normalized to `"mp4"`, `"mkv"`, or `"webm"` (never `"strm"` or comma-delimited strings), and `DefaultAudioStreamIndex` assigned to first audio stream index.
+- **Non-Blocking Inline Playback Probing (`ProbeService.cs`)**:
+  - `ProbeOneInlineAsync` bypasses background `_probeThrottle` completely and enforces a strict 8-second timeout, preventing playback hangs during heavy background library scans.
+- **Corrupted Container & Sequential Stream Index Fix (`ProbeService.cs`)**:
+  - `ExecuteCoreProbeAsync` normalizes format strings from FFmpeg (mapping comma-separated formats like `"mov,mp4,m4a..."` -> `"mp4"` and `"matroska,webm"` -> `"mkv"`), preventing database container corruption.
+  - Enforced `stream.ItemId = item.Id` and sequential 0-based `Index` (`0, 1, 2...`) on all `MediaStream` records saved via `SaveMediaStreams`.
+
+---
 ## [4.2.5] - 2026-10-22
 
 ### 🚀 Decoupled Probe Initiation & Deadlock-Free Semaphore Management

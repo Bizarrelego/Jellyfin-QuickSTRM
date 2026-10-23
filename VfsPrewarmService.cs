@@ -32,7 +32,7 @@ public class VfsPrewarmService : IDisposable
     };
 
     private const int HardwarePageSize = 4096;
-    private const int PrewarmSizeBytes = 5 * 1024 * 1024; // 5 MB = 1280 hardware pages
+    private const int PrewarmSizeBytes = 512 * 1024; // 512 KB = 524,288 bytes (128 hardware pages)
     private const int TailPrewarmSizeBytes = 1024 * 1024; // 1 MB = 256 hardware pages
     private const long TailThresholdBytes = 6L * 1024 * 1024; // 6 MB
     private const int BufferSize = 16 * HardwarePageSize; // 64 KB = 16 hardware pages (4096-byte boundary aligned)
@@ -42,6 +42,8 @@ public class VfsPrewarmService : IDisposable
     private readonly bool _ownsCache;
     private readonly ILogger<VfsPrewarmService> _logger;
     private readonly HttpClient _httpClient;
+    private readonly object _prewarmLock = new();
+    private readonly Dictionary<Guid, CancellationTokenSource> _activePrewarms = new(32);
 
     public VfsPrewarmService(
         ILibraryManager libraryManager,
@@ -87,7 +89,59 @@ public class VfsPrewarmService : IDisposable
         => IsRecentlyWarmed(itemId.ToString("N"));
 
     /// <summary>
-    /// Predictively pre-warms the media stream for the specified item ID by reading the first 5MB.
+    /// Cancels any active in-flight prewarm HTTP request for the specified item ID
+    /// so the playback client or FFmpeg gets 100% exclusive socket access.
+    /// </summary>
+    public void CancelPrewarm(string? itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+        {
+            return;
+        }
+
+        if (Guid.TryParse(itemId, out var parsedGuid))
+        {
+            CancelPrewarm(parsedGuid);
+        }
+    }
+
+    /// <summary>
+    /// Cancels any active in-flight prewarm HTTP request for the specified Guid
+    /// so the playback client or FFmpeg gets 100% exclusive socket access.
+    /// </summary>
+    public void CancelPrewarm(Guid itemId)
+    {
+        if (itemId == Guid.Empty)
+        {
+            return;
+        }
+
+        CancellationTokenSource? cts = null;
+        lock (_prewarmLock)
+        {
+            if (_activePrewarms.Remove(itemId, out var found))
+            {
+                cts = found;
+            }
+        }
+
+        if (cts is not null)
+        {
+            try
+            {
+                cts.Cancel();
+                cts.Dispose();
+                _logger.LogInformation("QuickSTRM: Active pre-warm cancelled for item {ItemId} to give exclusive playback access", itemId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "QuickSTRM: Error cancelling prewarm for {ItemId}", itemId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Predictively pre-warms the media stream for the specified item ID by reading the first 512KB.
     /// Aborts if the item was already pre-warmed within the last 5 minutes.
     /// </summary>
     public async Task PreWarmItemAsync(string itemId, CancellationToken ct = default)
@@ -153,8 +207,16 @@ public class VfsPrewarmService : IDisposable
 
         using var timeoutCts = ct.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-            : new CancellationTokenSource();
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(8));
+            : new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        if (ct.CanBeCanceled)
+        {
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(8));
+        }
+
+        lock (_prewarmLock)
+        {
+            _activePrewarms[id] = timeoutCts;
+        }
 
         try
         {
@@ -178,6 +240,13 @@ public class VfsPrewarmService : IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "QuickSTRM: Failed to pre-warm stream for {Name} ({ItemId})", item.Name, itemId);
+        }
+        finally
+        {
+            lock (_prewarmLock)
+            {
+                _activePrewarms.Remove(id);
+            }
         }
     }
 
@@ -428,6 +497,22 @@ public class VfsPrewarmService : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        lock (_prewarmLock)
+        {
+            foreach (var kvp in _activePrewarms)
+            {
+                try
+                {
+                    kvp.Value.Cancel();
+                    kvp.Value.Dispose();
+                }
+                catch
+                {
+                }
+            }
+            _activePrewarms.Clear();
+        }
+
         if (!ReferenceEquals(_httpClient, Plugin.HttpClient))
         {
             _httpClient.Dispose();

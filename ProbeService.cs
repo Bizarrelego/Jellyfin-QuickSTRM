@@ -186,7 +186,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private static readonly TimeSpan BackgroundProbeTimeout = TimeSpan.FromSeconds(60);
 
     // protects connected clients: inline (playback-time) probes allow hold-open retry window (~8s) plus probe execution
-    private static readonly TimeSpan InlineProbeTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan InlineProbeTimeout = TimeSpan.FromSeconds(8);
 
     // Circuit breaker: consecutive probe/HEAD failures beyond this trip the breaker (a cloud mount drop looks like mass failure)
     private const int CircuitBreakerThreshold = 10;
@@ -1590,7 +1590,8 @@ public sealed class ProbeService : IHostedService, IDisposable
         MediaInfo? mediaInfo = null;
         try
         {
-            using var linkedBudget = CancellationTokenSource.CreateLinkedTokenSource(budgetToken, ct);
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var linkedBudget = CancellationTokenSource.CreateLinkedTokenSource(budgetToken, ct, timeoutCts.Token);
             item ??= (itemId != Guid.Empty ? _libraryManager.GetItemById(itemId) : null)
                      ?? new ProbeTargetItem { Id = itemId != Guid.Empty ? itemId : Guid.NewGuid(), Path = source.Path };
             if (string.IsNullOrEmpty(item.Path))
@@ -1600,7 +1601,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
             try
             {
-                mediaInfo = await ExecuteCoreProbeAsync(item, TimeSpan.FromSeconds(25), linkedBudget.Token).ConfigureAwait(false);
+                // CRITICAL: Inline playback probe bypasses _probeThrottle completely and uses a fast 8-second timeout
+                mediaInfo = await ExecuteCoreProbeAsync(item, TimeSpan.FromSeconds(8), linkedBudget.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -2226,10 +2228,23 @@ public sealed class ProbeService : IHostedService, IDisposable
 
                 if (!string.IsNullOrEmpty(mediaInfo.Container))
                 {
-                    item.Container = mediaInfo.Container;
+                    var normalized = MediaSourceInterceptor.NormalizeContainer(mediaInfo.Container, item.Path);
+                    if (!string.IsNullOrEmpty(normalized))
+                    {
+                        item.Container = normalized;
+                    }
+                }
+                else if (!string.IsNullOrEmpty(item.Container))
+                {
+                    item.Container = MediaSourceInterceptor.NormalizeContainer(item.Container, item.Path);
                 }
 
                 var streams = mediaInfo.MediaStreams?.ToList() ?? new List<MediaStream>();
+                for (var i = 0; i < streams.Count; i++)
+                {
+                    streams[i].Index = i;
+                }
+
                 if (item.Id != Guid.Empty)
                 {
                     _inMemoryStreams[item.Id] = streams;

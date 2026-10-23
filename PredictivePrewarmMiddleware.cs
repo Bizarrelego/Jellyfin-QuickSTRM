@@ -18,6 +18,10 @@ public class PredictivePrewarmMiddleware : IMiddleware
         @"^/(?:Users/[^/]+/)?Items/([0-9a-fA-F]{8}-?(?:[0-9a-fA-F]{4}-?){3}[0-9a-fA-F]{12})$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private static readonly Regex PlaybackPathRegex = new(
+        @"/(?:Items|Videos)/([0-9a-fA-F]{8}-?(?:[0-9a-fA-F]{4}-?){3}[0-9a-fA-F]{12})/(?:PlaybackInfo|stream|master\.m3u8|main\.m3u8)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private readonly VfsPrewarmService _prewarmService;
     private readonly ILogger<PredictivePrewarmMiddleware> _logger;
 
@@ -33,17 +37,36 @@ public class PredictivePrewarmMiddleware : IMiddleware
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
         string? itemId = null;
+        var path = context.Request.Path.Value ?? string.Empty;
 
-        if (HttpMethods.IsGet(context.Request.Method))
+        // 1. Immediately cancel any active pre-warm if this is a playback or PlaybackInfo request
+        // so FFmpeg and Jellyfin get 100% exclusive access to the Infinidysk stream without contention
+        var isPlaybackRequest = path.Contains("PlaybackInfo", StringComparison.OrdinalIgnoreCase) ||
+                                path.Contains("/stream", StringComparison.OrdinalIgnoreCase) ||
+                                path.Contains("/Videos/", StringComparison.OrdinalIgnoreCase) ||
+                                path.Contains("/Sessions/Playing", StringComparison.OrdinalIgnoreCase);
+
+        if (isPlaybackRequest)
         {
-            var path = context.Request.Path.Value;
-            if (!string.IsNullOrEmpty(path))
+            var pbMatch = PlaybackPathRegex.Match(path);
+            if (pbMatch.Success && pbMatch.Groups.Count > 1)
             {
-                var match = ItemDetailRegex.Match(path);
-                if (match.Success && match.Groups.Count > 1)
-                {
-                    itemId = match.Groups[1].Value;
-                }
+                _prewarmService.CancelPrewarm(pbMatch.Groups[1].Value);
+            }
+            else if (context.Request.Query.TryGetValue("itemId", out var qItemId) && !string.IsNullOrEmpty(qItemId))
+            {
+                _prewarmService.CancelPrewarm(qItemId.ToString());
+            }
+        }
+
+        // 2. Only pre-warm for detail/hover browsing (GET /Users/{u}/Items/{id} or /Items/{id})
+        // and NEVER for playback or stream endpoints
+        if (!isPlaybackRequest && HttpMethods.IsGet(context.Request.Method))
+        {
+            var match = ItemDetailRegex.Match(path);
+            if (match.Success && match.Groups.Count > 1)
+            {
+                itemId = match.Groups[1].Value;
             }
         }
 

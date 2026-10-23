@@ -27,6 +27,7 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
     private readonly ILibraryManager _libraryManager;
     private readonly ProbeService _probeService;
     private readonly IChapterManager? _chapterManager;
+    private readonly VfsPrewarmService? _prewarmService;
     private readonly ILogger<SessionMonitorService> _logger;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _prewarmedSessions = new();
     private int _disposed;
@@ -36,13 +37,15 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
         ILibraryManager libraryManager,
         ProbeService probeService,
         ILogger<SessionMonitorService> logger,
-        IChapterManager? chapterManager = null)
+        IChapterManager? chapterManager = null,
+        VfsPrewarmService? prewarmService = null)
     {
         _sessionManager = sessionManager;
         _libraryManager = libraryManager;
         _probeService = probeService;
         _logger = logger;
         _chapterManager = chapterManager;
+        _prewarmService = prewarmService;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -64,6 +67,12 @@ public sealed class SessionMonitorService : IHostedService, IDisposable
 
     private void OnPlaybackStart(object? sender, PlaybackProgressEventArgs e)
     {
+        if (e.Item?.Id != null && e.Item.Id != Guid.Empty)
+        {
+            _prewarmService?.CancelPrewarm(e.Item.Id.ToString("N"));
+            _prewarmService?.CancelPrewarm(e.Item.Id.ToString());
+        }
+
         var sessionId = e.Session?.Id;
         if (!string.IsNullOrEmpty(sessionId) && !_prewarmedSessions.TryAdd(sessionId, 0))
         {

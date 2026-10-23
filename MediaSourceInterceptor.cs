@@ -70,44 +70,32 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var sources = (await _inner.GetPlaybackMediaSources(
             item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken).ConfigureAwait(false)).ToList();
 
-        // Inspect sources directly: if any source already has cached video and audio streams in MediaStreams,
-        // return immediately without querying SQLite a second time.
-        var hasCachedStreams = false;
-        for (var i = 0; i < sources.Count; i++)
-        {
-            if (HasVideoAndAudioStreams(sources[i]))
-            {
-                hasCachedStreams = true;
-                break;
-            }
-        }
+        // Populate MediaStreams from SQLite if available and normalize
+        EnsureStreamCapabilities(sources, item.Id);
 
-        if (hasCachedStreams)
+        var completeSources = sources.Where(HasCompleteMediaStreams).ToList();
+        if (completeSources.Count > 0)
         {
             _logger.LogDebug(
-                "QuickSTRM: Item {Name} has cached video and audio streams in database; returning MediaSourceInfo immediately without probing",
+                "QuickSTRM: Item {Name} has complete video and audio streams in database; returning MediaSourceInfo immediately without probing",
                 item.Name);
 
-            EnsureStreamCapabilities(sources, item.Id);
-            return sources;
-        }
+            foreach (var s in completeSources)
+            {
+                NormalizeMediaSourceInfo(s);
+            }
 
-        if (item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0)
-        {
-            _logger.LogDebug(
-                "QuickSTRM: Skipping ffprobe for {Name} (RunTimeTicks={Ticks})",
-                item.Name,
-                item.RunTimeTicks.Value);
-
-            EnsureStreamCapabilities(sources, item.Id);
-            return sources;
+            return completeSources;
         }
 
         if (!allowMediaProbe)
         {
-            // protects the Core i3: if the caller already forbade probing we must not start one
-            EnsureStreamCapabilities(sources, item.Id);
-            return sources;
+            // CRITICAL: If item does not have complete streams and probing is disallowed,
+            // return empty list so Jellyfin's native playback pipeline handles the .strm file natively!
+            _logger.LogDebug(
+                "QuickSTRM: Item {Name} lacks complete streams and probing is disallowed; falling back to Jellyfin native pipeline",
+                item.Name);
+            return Array.Empty<MediaSourceInfo>();
         }
 
         // only this rare first-play path pays for an async state machine, because it must await the capped probe
@@ -139,7 +127,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             {
                 if (source.Type != MediaSourceType.Placeholder
                     && staticIds.Contains(source.Id)
-                    && !HasVideoAndAudioStreams(source))
+                    && !HasCompleteMediaStreams(source))
                 {
                     targets.Add(source);
                 }
@@ -148,7 +136,16 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             if (targets.Count == 0)
             {
                 EnsureStreamCapabilities(resolved, item.Id);
-                return resolved;
+                var validSources = resolved.Where(HasCompleteMediaStreams).ToList();
+                if (validSources.Count > 0)
+                {
+                    foreach (var s in validSources)
+                    {
+                        NormalizeMediaSourceInfo(s);
+                    }
+                    return validSources;
+                }
+                return Array.Empty<MediaSourceInfo>();
             }
 
             // improves efficiency: from here on the item is unprobed in the database, so it must be persisted whether the inline
@@ -164,13 +161,31 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 // the pipeline admits exactly one half-open trial that must fully succeed in ffprobe before the circuit closes
                 probeService.EnqueueBackgroundPersist(item, highPriority: true);
                 EnsureStreamCapabilities(resolved, item.Id);
-                return resolved;
+                var validSources = resolved.Where(HasCompleteMediaStreams).ToList();
+                if (validSources.Count > 0)
+                {
+                    foreach (var s in validSources)
+                    {
+                        NormalizeMediaSourceInfo(s);
+                    }
+                    return validSources;
+                }
+                return Array.Empty<MediaSourceInfo>();
             }
 
             if (!await probeService.PreflightAsync(item, cancellationToken).ConfigureAwait(false))
             {
                 EnsureStreamCapabilities(resolved, item.Id);
-                return resolved;
+                var validSources = resolved.Where(HasCompleteMediaStreams).ToList();
+                if (validSources.Count > 0)
+                {
+                    foreach (var s in validSources)
+                    {
+                        NormalizeMediaSourceInfo(s);
+                    }
+                    return validSources;
+                }
+                return Array.Empty<MediaSourceInfo>();
             }
 
             // protects the Core i3 from latency spikes: every source shares ONE budget and the 2-process gate, and the
@@ -221,31 +236,141 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             }
         }
 
-        // protects the Core i3 from blocking I/O: allowMediaProbe was false for the whole resolution, so Jellyfin never launches
-        // a second, uncapped ffprobe; on fallback the client receives the plain .strm URL and resolves the stream natively
         EnsureStreamCapabilities(resolved, item.Id);
-        return resolved;
-    }
-
-    private static bool HasVideoStream(MediaSourceInfo source)
-    {
-        if (source?.MediaStreams is null)
+        var complete = resolved.Where(HasCompleteMediaStreams).ToList();
+        if (complete.Count > 0)
         {
-            return false;
+            foreach (var s in complete)
+            {
+                NormalizeMediaSourceInfo(s);
+            }
+            return complete;
         }
 
-        foreach (var stream in source.MediaStreams)
+        _logger.LogInformation(
+            "QuickSTRM: Item {Name} does not have complete video and audio streams; returning empty sources so Jellyfin native playback pipeline resolves .strm natively",
+            item.Name);
+        return Array.Empty<MediaSourceInfo>();
+    }
+
+    public static string NormalizeContainer(string container, string path = null)
+    {
+        var input = container?.Trim();
+        if (string.Equals(input, "strm", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(input))
         {
-            if (stream.Type == MediaStreamType.Video)
+            if (!string.IsNullOrEmpty(path))
             {
-                return true;
+                try
+                {
+                    var uriPath = Uri.TryCreate(path, UriKind.Absolute, out var uri) ? uri.AbsolutePath : path;
+                    var ext = System.IO.Path.GetExtension(uriPath).TrimStart('.').Trim();
+                    if (!string.IsNullOrEmpty(ext) && !ext.Equals("strm", StringComparison.OrdinalIgnoreCase))
+                    {
+                        input = ext;
+                    }
+                }
+                catch
+                {
+                }
             }
         }
 
-        return false;
+        if (string.IsNullOrWhiteSpace(input) || string.Equals(input, "strm", StringComparison.OrdinalIgnoreCase))
+        {
+            return "mp4";
+        }
+
+        if (input.Contains("mp4", StringComparison.OrdinalIgnoreCase) || input.Contains("mov", StringComparison.OrdinalIgnoreCase))
+        {
+            return "mp4";
+        }
+
+        if (input.Contains("matroska", StringComparison.OrdinalIgnoreCase) || input.Contains("mkv", StringComparison.OrdinalIgnoreCase))
+        {
+            return "mkv";
+        }
+
+        if (input.Contains("webm", StringComparison.OrdinalIgnoreCase))
+        {
+            return "webm";
+        }
+
+        if (input.Contains(','))
+        {
+            var parts = input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var part in parts)
+            {
+                if (part.Contains("mp4", StringComparison.OrdinalIgnoreCase) || part.Contains("mov", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "mp4";
+                }
+
+                if (part.Contains("matroska", StringComparison.OrdinalIgnoreCase) || part.Contains("mkv", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "mkv";
+                }
+
+                if (part.Contains("webm", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "webm";
+                }
+            }
+
+            var first = parts.FirstOrDefault();
+            if (!string.IsNullOrEmpty(first) && !string.Equals(first, "strm", StringComparison.OrdinalIgnoreCase))
+            {
+                return first;
+            }
+
+            return "mp4";
+        }
+
+        return input;
     }
 
-    private static bool HasVideoAndAudioStreams(MediaSourceInfo source)
+    public static void NormalizeMediaSourceInfo(MediaSourceInfo source)
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(source.Path) &&
+            (source.Path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+             source.Path.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+        {
+            source.Protocol = MediaProtocol.Http;
+        }
+        else
+        {
+            source.Protocol = MediaProtocol.File;
+        }
+
+        source.Container = NormalizeContainer(source.Container, source.Path);
+        source.RequiresOpening = false;
+        source.SupportsProbing = true;
+
+        if (source.MediaStreams is not null && source.MediaStreams.Count > 0)
+        {
+            var firstAudio = source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Audio);
+            if (firstAudio is not null && firstAudio.Index >= 0)
+            {
+                source.DefaultAudioStreamIndex = firstAudio.Index;
+            }
+
+            var firstSubtitle = source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Subtitle);
+            if (firstSubtitle is not null && firstSubtitle.Index >= 0)
+            {
+                source.DefaultSubtitleStreamIndex = firstSubtitle.Index;
+            }
+            else
+            {
+                source.DefaultSubtitleStreamIndex = null;
+            }
+        }
+    }
+
+    public static bool HasCompleteMediaStreams(MediaSourceInfo source)
     {
         if (source?.MediaStreams is null || source.MediaStreams.Count == 0)
         {
@@ -254,38 +379,20 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         var hasVideo = false;
         var hasAudio = false;
+
         for (var i = 0; i < source.MediaStreams.Count; i++)
         {
-            var type = source.MediaStreams[i].Type;
-            if (type == MediaStreamType.Video)
+            var stream = source.MediaStreams[i];
+            if (stream.Type == MediaStreamType.Video && !string.IsNullOrWhiteSpace(stream.Codec))
             {
                 hasVideo = true;
             }
-            else if (type == MediaStreamType.Audio)
+            else if (stream.Type == MediaStreamType.Audio && !string.IsNullOrWhiteSpace(stream.Codec))
             {
                 hasAudio = true;
             }
 
             if (hasVideo && hasAudio)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasValidMediaStreams(MediaSourceInfo source)
-    {
-        if (source?.MediaStreams is null || source.MediaStreams.Count == 0)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < source.MediaStreams.Count; i++)
-        {
-            var type = source.MediaStreams[i].Type;
-            if (type == MediaStreamType.Video || type == MediaStreamType.Audio)
             {
                 return true;
             }
@@ -318,8 +425,9 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             }
         }
 
-        if (HasValidMediaStreams(source))
+        if (HasCompleteMediaStreams(source))
         {
+            NormalizeMediaSourceInfo(source);
             source.SupportsDirectPlay = true;
             source.SupportsDirectStream = true;
             source.SupportsTranscoding = true;
@@ -349,7 +457,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         // improves client stability: constrained clients (e.g. Fire TV Stick 4K) decide direct-play vs transcode from these
         // container/format/timestamp/3D/video-type flags plus per-stream codec data, so a partial copy would break parsing
         source.Bitrate = info.Bitrate;
-        source.Container = info.Container;
+        source.Container = NormalizeContainer(info.Container, source.Path);
         source.Formats = info.Formats;
         source.MediaStreams = info.MediaStreams;
         source.RunTimeTicks = info.RunTimeTicks;
@@ -357,9 +465,10 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         source.Timestamp = info.Timestamp;
         source.Video3DFormat = info.Video3DFormat;
         source.VideoType = info.VideoType;
-        source.DefaultSubtitleStreamIndex = null;
 
-        if (HasValidMediaStreams(source))
+        NormalizeMediaSourceInfo(source);
+
+        if (HasCompleteMediaStreams(source))
         {
             source.SupportsDirectPlay = true;
             source.SupportsDirectStream = true;
@@ -368,15 +477,18 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         MediaStream audioStream = null;
         MediaStream videoStream = null;
-        foreach (var stream in source.MediaStreams)
+        if (source.MediaStreams is not null)
         {
-            if (audioStream is null && stream.Type == MediaStreamType.Audio)
+            foreach (var stream in source.MediaStreams)
             {
-                audioStream = stream;
-            }
-            else if (videoStream is null && stream.Type == MediaStreamType.Video)
-            {
-                videoStream = stream;
+                if (audioStream is null && stream.Type == MediaStreamType.Audio)
+                {
+                    audioStream = stream;
+                }
+                else if (videoStream is null && stream.Type == MediaStreamType.Video)
+                {
+                    videoStream = stream;
+                }
             }
         }
 
