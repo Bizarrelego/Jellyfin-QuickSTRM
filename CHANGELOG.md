@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.1] - 2026-10-22
+
+### 🛡️ Bounded 3-Strike Auto-Heal Retry Pipeline & Sweeper Integration
+
+Targeted resilience and recovery release implementing a bounded 3-strike state machine for failing `.strm` probes, preventing transient network glitches or cold mount delays from prematurely deleting media files while guaranteeing autonomous cleanup of confirmed dead links.
+
+### Added
+- **Bounded 3-Strike Retry State Machine (`ProbeService.cs`)**:
+  - Implements thread-safe consecutive strike tracking via `ConcurrentDictionary<Guid, int> _itemRetryCounts`.
+  - Captures `TimeoutException`, `HttpRequestException`, and `FfmpegException` failures during HTTP preflight and `_mediaEncoder.GetMediaInfo` probing.
+  - Strikes 1 and 2: Logs a transient warning, places the item in `_failedPersistCache` with a 15-minute expiration, and preserves the physical `.strm` file without deletion.
+  - Strike 3: Permanently marks the item as dead, deletes the physical `.strm` file, pushes provider IDs into the native `AutoHealService` feed for *arr replenishment, removes the item from the Jellyfin library, refreshes the parent folder, and evicts the item from the retry dictionary.
+  - Success path: Automatically resets consecutive failure strikes to 0 (`_itemRetryCounts.TryRemove`) upon successful probe and SQLite `SaveMediaStreams` execution.
+- **Automated 3-Strike Regression Suite (`ProbeRetryTests.cs`)**:
+  - Validates transient strikes 1 and 2 retain files on disk while strike 3 triggers physical deletion and auto-healing.
+  - Verifies retry count reset on probe recovery and sweepers driving files through the state machine.
+
+### Changed
+- **Proactive Sweeper Pipeline Integration (`ProactiveSweeperTask.cs`)**:
+  - Refactored daily maintenance sweeper to route directly through `ExecuteCoreProbeAsync`, unifying probe execution, preflight checks, and strike progression across both background sweeps and interactive playback.
+  - Added configurable pacing delay (`SweepPacingDelayMs`) for instantaneous zero-wait test execution.
+- **Full Refresh Reset Slate (`ProbeService.cs`)**:
+  - Ensures manual full refresh scans (`QueueLibraryScanAsync(ProbeMode.FullRefresh)` and `StartProbe("FullRefresh")`) and `ClearFailureCache()` reset `_itemRetryCounts` to provide a completely clean retry baseline.
+
+---
 ## [4.2.0] - 2026-10-22
 
 ### ⚡ Pipeline Consolidation, Dead-Code Purge, Adaptive UI & Tightened Benchmarks

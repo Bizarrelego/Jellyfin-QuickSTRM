@@ -32,6 +32,15 @@ using System.Runtime.CompilerServices;
 namespace QuickSTRM;
 
 /// <summary>
+/// Exception thrown when FFprobe encounters an unrecoverable probing error, format failure, or returns no streams.
+/// </summary>
+public class FfmpegException : Exception
+{
+    public FfmpegException(string message) : base(message) { }
+    public FfmpegException(string message, Exception innerException) : base(message, innerException) { }
+}
+
+/// <summary>
 /// Operational mode for manual library pre-probing.
 /// </summary>
 public enum ProbeMode
@@ -92,6 +101,12 @@ public sealed class ProbeService : IHostedService, IDisposable
     // absolute expiration: entry expires exactly 1 hour after failure regardless of how often it is queried;
     // prevents perpetual lockouts from automated client retries continuously resetting a sliding window
     private static readonly TimeSpan FailedPersistAbsoluteExpiration = TimeSpan.FromHours(1);
+
+    // Consecutive failure retry count per item across probe passes (3-strike state machine)
+    private readonly ConcurrentDictionary<Guid, int> _itemRetryCounts = new();
+
+    /// <summary>Gets the current consecutive failure retry counts for items.</summary>
+    public IReadOnlyDictionary<Guid, int> ItemRetryCounts => _itemRetryCounts;
 
     private readonly Channel<BaseItem> _highPriorityChannel = Channel.CreateBounded<BaseItem>(
         new BoundedChannelOptions(MaxPendingPersist) { FullMode = BoundedChannelFullMode.DropWrite });
@@ -544,8 +559,9 @@ public sealed class ProbeService : IHostedService, IDisposable
     {
         _failedPersistCache.Clear();
         _resolvedUrlCache.Clear();
+        _itemRetryCounts.Clear();
         ResetCircuitBreaker();
-        _logger.LogInformation("QuickSTRM: Flushed negative persistence failure cache and resolved URL cache");
+        _logger.LogInformation("QuickSTRM: Flushed negative persistence failure cache, resolved URL cache, and retry counts");
     }
 
     /// <summary>Manual override: closes the breaker immediately, zeroes the failure counter, and clears the failure cache.</summary>
@@ -1363,7 +1379,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// </summary>
     public async Task AutoHealDeadItemAsync(BaseItem item, CancellationToken ct = default)
     {
-        if (Plugin.Instance?.Configuration is not { EnableAutoDelete: true })
+        if (Plugin.Instance?.Configuration is { EnableAutoDelete: false })
         {
             _logger.LogInformation("QuickSTRM: Auto-delete disabled in configuration; skipping deletion of dead .strm link {Name}", item.Name);
             return;
@@ -1414,8 +1430,16 @@ public sealed class ProbeService : IHostedService, IDisposable
                 }
             }
 
+            if (item.Id != Guid.Empty)
+            {
+                _itemRetryCounts.TryRemove(item.Id, out _);
+            }
+
             _logger.LogWarning("QuickSTRM: Auto-deleted dead .strm link {Name} ({Path}) and pushed to Auto-Heal feed", item.Name, deletedPath);
-            await _telemetryService.LogAutoHealAsync(deletedPath ?? item.Name, item.Name).ConfigureAwait(false);
+            if (_telemetryService is not null)
+            {
+                await _telemetryService.LogAutoHealAsync(deletedPath ?? item.Name, item.Name).ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
@@ -1583,6 +1607,12 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// </summary>
     public Task QueueLibraryScanAsync(ProbeMode mode)
     {
+        var isIncremental = mode == ProbeMode.Incremental || mode == ProbeMode.OnlyUnprobed;
+        if (!isIncremental)
+        {
+            _itemRetryCounts.Clear();
+        }
+
         Interlocked.Exchange(ref _isBatchRunning, 1);
         EnsureConsumerRunning();
         if (Interlocked.CompareExchange(ref _isScanningLibrary, 1, 0) != 0)
@@ -1663,7 +1693,8 @@ public sealed class ProbeService : IHostedService, IDisposable
                         continue;
                     }
 
-                    if (IsStrmFile(item.Path))
+                    var pStr = item.Path;
+                    if (pStr is not null && IsStrmFile(pStr.AsSpan()))
                     {
                         localList.Add(item);
                     }
@@ -1681,9 +1712,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             var combined = new List<BaseItem>(totalUnprobed);
             for (var p = 0; p < numPartitions; p++)
             {
-                if (partialResults[p] != null)
+                var part = partialResults[p];
+                if (part != null)
                 {
-                    combined.AddRange(partialResults[p]);
+                    combined.AddRange(part);
                 }
             }
             return combined;
@@ -1699,7 +1731,8 @@ public sealed class ProbeService : IHostedService, IDisposable
                 continue;
             }
 
-            if (IsStrmFile(item.Path))
+            var pStr = item.Path;
+            if (pStr is not null && IsStrmFile(pStr.AsSpan()))
             {
                 unprobed.Add(item);
             }
@@ -1715,6 +1748,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             _failedPersistCache.Clear();
             ClearResolvedUrlCache();
+            _itemRetryCounts.Clear();
         }
 
         var offset = 0;
@@ -1833,6 +1867,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             {
                 _failedPersistCache.Clear();
                 ClearResolvedUrlCache();
+                _itemRetryCounts.Clear();
             }
 
             var items = GetStrmItems();
@@ -2019,9 +2054,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     item.Name,
                     item.Path,
                     failureKind);
-                MarkPersistFailed(item);
-                HandleFailure(item, failureKind);
-                return null;
+                return await HandleProbeStrikeFailureAsync(item, ex, ct).ConfigureAwait(false);
             }
         }
         else
@@ -2031,8 +2064,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         if (string.IsNullOrWhiteSpace(targetUrl))
         {
-            MarkPersistFailed(item);
-            return null;
+            return await HandleProbeStrikeFailureAsync(item, new FileNotFoundException($"Target URL in .strm file is empty for {item.Name}"), ct).ConfigureAwait(false);
         }
 
         var isHttp = targetUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
@@ -2040,112 +2072,116 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         var protocol = isHttp ? MediaProtocol.Http : MediaProtocol.File;
 
-        if (isHttp)
+        try
         {
-            using var preflightCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            using var linkedPreflight = CancellationTokenSource.CreateLinkedTokenSource(ct, preflightCts.Token);
+            if (isHttp)
+            {
+                using var preflightCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                using var linkedPreflight = CancellationTokenSource.CreateLinkedTokenSource(ct, preflightCts.Token);
 
-            await _headGate.WaitAsync(linkedPreflight.Token).ConfigureAwait(false);
-            HttpPreflightResult httpResult;
+                await _headGate.WaitAsync(linkedPreflight.Token).ConfigureAwait(false);
+                HttpPreflightResult httpResult;
+                try
+                {
+                    if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var uri))
+                    {
+                        throw new HttpRequestException($"Invalid absolute URL format: {targetUrl}");
+                    }
+
+                    httpResult = await CheckHttpEndpointWithHoldOpenRetryAsync(uri, linkedPreflight.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    throw new TimeoutException($"Pre-flight check timed out after 8s for {item.Name}");
+                }
+                finally
+                {
+                    ReleaseQuietly(_headGate);
+                }
+
+                if (!httpResult.IsHealthy)
+                {
+                    throw new HttpRequestException(
+                        $"Pre-flight check failed after hold-open retries for {item.Name}; status {httpResult.StatusCode} ({httpResult.FailureKind})",
+                        null,
+                        httpResult.StatusCode);
+                }
+            }
+            else if (IsStrmFile(item.Path) || (Path.IsPathRooted(targetUrl) && !targetUrl.Contains("://", StringComparison.Ordinal)))
+            {
+                if (!File.Exists(targetUrl))
+                {
+                    var localExists = false;
+                    foreach (var delay in HoldOpenRetryDelays)
+                    {
+                        try
+                        {
+                            await Task.Delay(delay, ct).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                        {
+                            return null;
+                        }
+
+                        if (File.Exists(targetUrl))
+                        {
+                            localExists = true;
+                            break;
+                        }
+                    }
+
+                    if (!localExists)
+                    {
+                        throw new FileNotFoundException($"Local target missing after hold-open retry window for {item.Name}: {targetUrl}");
+                    }
+                }
+            }
+
             try
             {
-                if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var uri))
-                {
-                    MarkPersistFailed(item);
-                    HandleFailure(item, FailureKind.PermanentFailure);
-                    return null;
-                }
-
-                httpResult = await CheckHttpEndpointWithHoldOpenRetryAsync(uri, linkedPreflight.Token).ConfigureAwait(false);
+                await _probeGate.WaitAsync(ct).ConfigureAwait(false);
             }
-            finally
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                ReleaseQuietly(_headGate);
-            }
-
-            if (!httpResult.IsHealthy)
-            {
-                _logger.LogWarning(
-                    "QuickSTRM: Pre-flight check failed after hold-open retries for {Name}; status {Status} ({Kind})",
-                    item.Name,
-                    httpResult.StatusCode,
-                    httpResult.FailureKind);
-
-                MarkPersistFailed(item);
-                HandleFailure(item, httpResult.FailureKind);
                 return null;
             }
-        }
-        else if (IsStrmFile(item.Path) || (Path.IsPathRooted(targetUrl) && !targetUrl.Contains("://", StringComparison.Ordinal)))
-        {
-            if (!File.Exists(targetUrl))
-            {
-                var localExists = false;
-                foreach (var delay in HoldOpenRetryDelays)
-                {
-                    try
-                    {
-                        await Task.Delay(delay, ct).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        return null;
-                    }
 
-                    if (File.Exists(targetUrl))
-                    {
-                        localExists = true;
-                        break;
-                    }
+            try
+            {
+                using var probeCts = new CancellationTokenSource(ffprobeTimeout);
+                using var linkedProbe = CancellationTokenSource.CreateLinkedTokenSource(ct, probeCts.Token);
+
+                var mediaSource = new MediaSourceInfo
+                {
+                    Id = item.Id.ToString("N"),
+                    Path = targetUrl,
+                    Protocol = protocol,
+                    Type = MediaSourceType.Default,
+                    Container = Path.GetExtension(targetUrl).TrimStart('.')
+                };
+
+                MediaInfo? mediaInfo;
+                try
+                {
+                    mediaInfo = await _mediaEncoder.GetMediaInfo(
+                        new MediaInfoRequest
+                        {
+                            MediaSource = mediaSource,
+                            MediaType = DlnaProfileType.Video,
+                            ExtractChapters = false
+                        },
+                        linkedProbe.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    throw new TimeoutException($"Hardened FFprobe killswitch triggered after {ffprobeTimeout.TotalSeconds}s for {item.Name}");
                 }
 
-                if (!localExists)
+                if (mediaInfo is null)
                 {
-                    _logger.LogWarning(
-                        "QuickSTRM: Local target missing after hold-open retry window for {Name}: {Url}",
-                        item.Name,
-                        targetUrl);
-                    MarkPersistFailed(item);
-                    HandleFailure(item, FailureKind.TemporaryFailure);
-                    return null;
+                    throw new FfmpegException($"FFprobe returned null media info for {item.Name}");
                 }
-            }
-        }
 
-        try
-        {
-            await _probeGate.WaitAsync(ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return null;
-        }
-
-        try
-        {
-            using var probeCts = new CancellationTokenSource(ffprobeTimeout);
-            using var linkedProbe = CancellationTokenSource.CreateLinkedTokenSource(ct, probeCts.Token);
-
-            var mediaSource = new MediaSourceInfo
-            {
-                Id = item.Id.ToString("N"),
-                Path = targetUrl,
-                Protocol = protocol,
-                Type = MediaSourceType.Default,
-                Container = Path.GetExtension(targetUrl).TrimStart('.')
-            };
-
-            var mediaInfo = await _mediaEncoder.GetMediaInfo(
-                new MediaInfoRequest
-                {
-                    MediaSource = mediaSource,
-                    MediaType = DlnaProfileType.Video,
-                    ExtractChapters = false
-                },
-                linkedProbe.Token).ConfigureAwait(false);
-
-            if (mediaInfo is not null)
-            {
                 var videoStream = mediaInfo.MediaStreams?.FirstOrDefault(s => s.Type == MediaStreamType.Video);
                 if (videoStream is not null)
                 {
@@ -2194,33 +2230,65 @@ public sealed class ProbeService : IHostedService, IDisposable
 
                 RecordSuccess();
                 _telemetryService.IncrementProbed();
-            }
-            else
-            {
-                MarkPersistFailed(item);
-                HandleFailure(item, FailureKind.TemporaryFailure);
-            }
 
-            return mediaInfo;
+                // SUCCESS PATH: Reset retry count on successful probe & stream persistence
+                if (item.Id != Guid.Empty)
+                {
+                    _itemRetryCounts.TryRemove(item.Id, out _);
+                }
+
+                return mediaInfo;
+            }
+            finally
+            {
+                ReleaseQuietly(_probeGate);
+            }
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _logger.LogWarning("QuickSTRM: Hardened FFprobe killswitch triggered after {Timeout}s for {Name}", ffprobeTimeout.TotalSeconds, item.Name);
-            MarkPersistFailed(item);
-            HandleFailure(item, FailureKind.TemporaryFailure);
             return null;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        catch (Exception ex) when (ex is TimeoutException or HttpRequestException or FfmpegException or FileNotFoundException)
         {
-            _logger.LogWarning(ex, "QuickSTRM: Probe execution failed for {Name}", item.Name);
-            MarkPersistFailed(item);
-            HandleFailure(item, FailureKind.TemporaryFailure);
+            return await HandleProbeStrikeFailureAsync(item, ex, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "QuickSTRM: Probe execution unexpected error for {Name}", item.Name);
+            return await HandleProbeStrikeFailureAsync(item, new FfmpegException(ex.Message, ex), ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<MediaInfo?> HandleProbeStrikeFailureAsync(BaseItem item, Exception ex, CancellationToken ct)
+    {
+        var retryCount = _itemRetryCounts.AddOrUpdate(item.Id, 1, static (_, current) => current + 1);
+
+        if (retryCount < 3)
+        {
+            _logger.LogWarning(
+                ex,
+                "QuickSTRM: Probe failure strike {Count}/3 for {Name} ({Id}): {Message}. Added to failure cache (15m expiration)",
+                retryCount,
+                item.Name,
+                item.Id,
+                ex.Message);
+
+            _failedPersistCache[item.Id] = DateTime.UtcNow.Add(TimeSpan.FromMinutes(15));
+            RecordFailure();
             return null;
         }
-        finally
-        {
-            ReleaseQuietly(_probeGate);
-        }
+
+        _logger.LogWarning(
+            ex,
+            "QuickSTRM: Probe failure strike {Count}/3 reached for {Name} ({Id}). Treating as permanent dead link and auto-healing",
+            retryCount,
+            item.Name,
+            item.Id);
+
+        _itemRetryCounts.TryRemove(item.Id, out _);
+        RecordFailure();
+        await AutoHealDeadItemAsync(item, ct).ConfigureAwait(false);
+        return null;
     }
 
     private async Task<bool> ProbeItemCoreAsync(

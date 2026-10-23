@@ -63,13 +63,14 @@ public class ProactiveSweeperTask : IScheduledTask
         };
     }
 
+    internal static int SweepPacingDelayMs { get; set; } = 1000;
+
     /// <inheritdoc />
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         _logger.LogInformation("QuickSTRM: Starting Proactive STRM Dead Link Sweeper task");
         progress?.Report(0);
 
-        var httpClient = _httpClientFactory.CreateClient("QuickSTRM");
         var processed = 0;
         var deadCount = 0;
         var offset = 0;
@@ -99,8 +100,11 @@ public class ProactiveSweeperTask : IScheduledTask
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Paced loop: wait 1000ms between each check to prevent rate-limiting and Core i3 thread exhaustion
-                await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
+                // Paced loop: wait SweepPacingDelayMs between each check to prevent rate-limiting and Core i3 thread exhaustion
+                if (SweepPacingDelayMs > 0)
+                {
+                    await Task.Delay(SweepPacingDelayMs, cancellationToken).ConfigureAwait(false);
+                }
 
                 try
                 {
@@ -109,30 +113,14 @@ public class ProactiveSweeperTask : IScheduledTask
                         continue;
                     }
 
-                    var url = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
-                    if (string.IsNullOrWhiteSpace(url))
-                    {
-                        continue;
-                    }
+                    var mediaInfo = await _probeService.ExecuteCoreProbeAsync(
+                        item,
+                        TimeSpan.FromSeconds(15),
+                        cancellationToken).ConfigureAwait(false);
 
-                    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-                        (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-                    {
-                        continue;
-                    }
-
-                    using var request = new HttpRequestMessage(HttpMethod.Head, uri);
-                    request.Headers.UserAgent.ParseAdd("QuickSTRM/2.0");
-
-                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    cts.CancelAfter(TimeSpan.FromSeconds(10));
-
-                    using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-                    if (response.StatusCode == HttpStatusCode.NotFound)
+                    if (mediaInfo is null && !File.Exists(item.Path))
                     {
                         deadCount++;
-                        _logger.LogWarning("QuickSTRM Sweeper: Detected 404 Not Found for {Name} ({Url})", item.Name, url);
-                        await _probeService.AutoHealDeadItemAsync(item, cancellationToken).ConfigureAwait(false);
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
