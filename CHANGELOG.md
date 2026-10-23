@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.10] - 2026-10-23
+
+### ⚡ Thread Starvation Elimination & Missing .STRM Fast-Fail Auto-Healing
+
+Targeted stability and performance release eliminating Kestrel thread pool starvation by converting repository metadata saves to fully asynchronous tasks, stripping redundant synchronous database updates, accelerating missing `.strm` file failure detection, and eliminating noisy CLR exception stack traces from operational logs.
+
+### Added
+- **Asynchronous SQLite Stream & Metadata Persistence (`ProbeService.cs` & `ItemRepositoryExtensions`)**:
+  - Implemented `SaveMediaStreamsAsync` and `UpdateItemAsync` with `await task.ConfigureAwait(false)`, eliminating sync-over-async `.GetAwaiter().GetResult()` blocks.
+  - Eliminated thread pool starvation warnings in ASP.NET Core Kestrel (`heartbeat running for > 1.0s`).
+  - Purged redundant synchronous `_itemRepository.UpdateItem` call from `ApplyTrickplayPrevention`, committing trickplay lock states (`EnableTrickplay = false`, `.bif` purge) in a single asynchronous metadata edit alongside probed streams.
+- **Missing `.strm` Fast-Path & Clean Logging (`ProbeService.cs`)**:
+  - Fast-fails missing `.strm` files in `ReadStrmUrlCoreAsync` when the parent directory is mounted and readable, eliminating up to 8 seconds of hold-open retry delays on missing media.
+  - Replaced multi-line CLR exception stack traces with clean single-line diagnostic logs on file unavailability and strike progression.
+  - Immediately auto-heals confirmed `PermanentFailure` items (where the `.strm` file is absent from disk while the parent folder is verified mounted and healthy) when `EnableAutoDelete` is active, avoiding 3 strikes over 45 minutes for permanently deleted items.
+- **Automated Permanent Missing .STRM Regression Test (`ProbeRetryTests.cs`)**:
+  - Added `ProbeFailure_PermanentMissingStrmFile_ReadableParent_AutoHealsImmediately` verifying immediate auto-healing and library cleanup on missing `.strm` files in healthy mounts.
+
+---
 ## [4.2.9] - 2026-10-23
 
 ### 🛡️ StreamingHelpers Transcoder Crash Elimination & Native Source Fallback

@@ -920,6 +920,12 @@ public sealed class ProbeService : IHostedService, IDisposable
     {
         Interlocked.Increment(ref FileReadExecutionCount);
 
+        // Fast-path fail if the file is missing and the parent folder is readable (no mount drop)
+        if (!File.Exists(path) && IsParentDirectoryReadable(path))
+        {
+            throw new FileNotFoundException($"Could not find file '{path}'.", path);
+        }
+
         SafeFileHandle? handle = null;
         for (var attempt = 0; attempt <= HoldOpenRetryDelays.Length; attempt++)
         {
@@ -935,6 +941,11 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException && attempt < HoldOpenRetryDelays.Length)
             {
+                if (ex is FileNotFoundException && IsParentDirectoryReadable(path))
+                {
+                    throw;
+                }
+
                 await Task.Delay(HoldOpenRetryDelays[attempt], ct).ConfigureAwait(false);
             }
         }
@@ -1163,11 +1174,11 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
 
             _logger.LogWarning(
-                ex,
-                "QuickSTRM: .strm file unavailable for {Name}: {Path} ({Kind})",
+                "QuickSTRM: .strm file unavailable for \"{Name}\": \"{Path}\" ({Kind}): {Message}",
                 item.Name,
                 item.Path,
-                failureKind);
+                failureKind,
+                ex.Message);
             _failedPersistCache[item.Id] = DateTime.UtcNow.Add(TimeSpan.FromMinutes(15));
             HandleFailure(item, failureKind);
             return false;
@@ -2097,17 +2108,16 @@ public sealed class ProbeService : IHostedService, IDisposable
                 }
                 else if (ex is not (FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException))
                 {
-                    _logger.LogWarning(ex, "QuickSTRM: Cannot read .strm file {Path}", item.Path);
+                    _logger.LogWarning("QuickSTRM: Cannot read .strm file {Path}: {Message}", item.Path, ex.Message);
                     return null;
                 }
 
                 _logger.LogWarning(
-                    ex,
-                    "QuickSTRM: .strm file unavailable for {Name}: {Path} ({Kind})",
+                    "QuickSTRM: .strm file unavailable for \"{Name}\": \"{Path}\" ({Kind})",
                     item.Name,
                     item.Path,
                     failureKind);
-                return await HandleProbeStrikeFailureAsync(item, ex, ct).ConfigureAwait(false);
+                return await HandleProbeStrikeFailureAsync(item, ex, ct, failureKind).ConfigureAwait(false);
             }
         }
         else
@@ -2276,10 +2286,15 @@ public sealed class ProbeService : IHostedService, IDisposable
                     streams[i].Index = i;
                 }
 
+                if (HasStreamInfo(item))
+                {
+                    ApplyTrickplayPrevention(item);
+                }
+
                 if (item.Id != Guid.Empty)
                 {
                     _inMemoryStreams[item.Id] = streams;
-                    _itemRepository.SaveMediaStreams(item.Id, streams, CancellationToken.None);
+                    await _itemRepository.SaveMediaStreamsAsync(item.Id, streams, CancellationToken.None).ConfigureAwait(false);
 
                     try
                     {
@@ -2287,14 +2302,9 @@ public sealed class ProbeService : IHostedService, IDisposable
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "QuickSTRM: item.UpdateToRepositoryAsync failed for {Name}; falling back to UpdateItem", item.Name);
-                        _itemRepository.UpdateItem(item);
+                        _logger.LogWarning(ex, "QuickSTRM: item.UpdateToRepositoryAsync failed for {Name}; falling back to UpdateItemAsync", item.Name);
+                        await _itemRepository.UpdateItemAsync(item, CancellationToken.None).ConfigureAwait(false);
                     }
-                }
-
-                if (HasStreamInfo(item))
-                {
-                    ApplyTrickplayPrevention(item);
                 }
 
                 RecordSuccess();
@@ -2331,15 +2341,29 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
     }
 
-    private async Task<MediaInfo?> HandleProbeStrikeFailureAsync(BaseItem item, Exception ex, CancellationToken ct)
+    private async Task<MediaInfo?> HandleProbeStrikeFailureAsync(BaseItem item, Exception ex, CancellationToken ct, FailureKind kind = FailureKind.TemporaryFailure)
     {
+        // For confirmed permanent failures (e.g. .strm file permanently missing from readable mount),
+        // if auto-delete is not disabled, proceed straight to auto-heal without requiring 3 strikes over 45 minutes
+        if (kind == FailureKind.PermanentFailure && Plugin.Instance?.Configuration is not { EnableAutoDelete: false })
+        {
+            _logger.LogWarning(
+                "QuickSTRM: Confirmed permanent missing .strm file for \"{Name}\" ({Id}). Auto-healing and cleaning library entry",
+                item.Name,
+                item.Id);
+
+            _itemRetryCounts.TryRemove(item.Id, out _);
+            RecordFailure();
+            await AutoHealDeadItemAsync(item, ct).ConfigureAwait(false);
+            return null;
+        }
+
         var retryCount = _itemRetryCounts.AddOrUpdate(item.Id, 1, static (_, current) => current + 1);
 
         if (retryCount < 3)
         {
             _logger.LogWarning(
-                ex,
-                "QuickSTRM: Probe failure strike {Count}/3 for {Name} ({Id}): {Message}. Added to failure cache (15m expiration)",
+                "QuickSTRM: Probe failure strike {Count}/3 for \"{Name}\" ({Id}): {Message}. Added to failure cache (15m expiration)",
                 retryCount,
                 item.Name,
                 item.Id,
@@ -2351,11 +2375,11 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
 
         _logger.LogWarning(
-            ex,
-            "QuickSTRM: Probe failure strike {Count}/3 reached for {Name} ({Id}). Treating as permanent dead link and auto-healing",
+            "QuickSTRM: Probe failure strike {Count}/3 reached for \"{Name}\" ({Id}): {Message}. Treating as permanent dead link and auto-healing",
             retryCount,
             item.Name,
-            item.Id);
+            item.Id,
+            ex.Message);
 
         _itemRetryCounts.TryRemove(item.Id, out _);
         RecordFailure();
@@ -2516,9 +2540,6 @@ public sealed class ProbeService : IHostedService, IDisposable
                 item.ProviderIds.Remove("BifAttachment");
             }
 
-            // Call _itemRepository.UpdateItem to persist this protection lock
-            _itemRepository.UpdateItem(item);
-
             _logger.LogDebug("QuickSTRM: Trickplay prevention lock applied for {Name}", item.Name);
         }
         catch (Exception ex)
@@ -2537,7 +2558,39 @@ public static class ItemRepositoryExtensions
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo?> CachedSaveMediaStreamsMethods = new();
 
     /// <summary>
-    /// Persists item metadata changes to the repository or database.
+    /// Persists item metadata changes to the repository or database asynchronously.
+    /// </summary>
+    public static async Task UpdateItemAsync(this IItemRepository? repository, BaseItem item, CancellationToken cancellationToken = default)
+    {
+        if (repository is not null)
+        {
+            var repoType = repository.GetType();
+            var updateMethod = CachedUpdateMethods.GetOrAdd(repoType, t =>
+                t.GetMethod("UpdateItem", new[] { typeof(BaseItem) })
+                ?? t.GetMethod("UpdateItem", BindingFlags.Public | BindingFlags.Instance));
+
+            if (updateMethod is not null)
+            {
+                var res = updateMethod.Invoke(repository, new object[] { item });
+                if (res is Task task)
+                {
+                    await task.ConfigureAwait(false);
+                }
+                return;
+            }
+        }
+
+        try
+        {
+            await item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>
+    /// Synchronous compatibility shim for UpdateItemAsync.
     /// </summary>
     public static void UpdateItem(this IItemRepository? repository, BaseItem item)
     {
@@ -2550,17 +2603,66 @@ public static class ItemRepositoryExtensions
 
             if (updateMethod is not null)
             {
-                updateMethod.Invoke(repository, new object[] { item });
+                var res = updateMethod.Invoke(repository, new object[] { item });
+                if (res is Task task)
+                {
+                    task.ConfigureAwait(false).GetAwaiter().GetResult();
+                }
                 return;
             }
         }
 
         try
         {
-            item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None).GetAwaiter().GetResult();
+            item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None).ConfigureAwait(false).GetAwaiter().GetResult();
         }
         catch
         {
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously persists media stream descriptors directly to Jellyfin's SQLite database via IItemRepository.SaveMediaStreams.
+    /// </summary>
+    public static async Task SaveMediaStreamsAsync(this IItemRepository? repository, Guid itemId, IReadOnlyList<MediaStream> streams, CancellationToken cancellationToken = default)
+    {
+        if (repository is null)
+        {
+            return;
+        }
+
+        var repoType = repository.GetType();
+        var saveMethod = CachedSaveMediaStreamsMethods.GetOrAdd(repoType, t =>
+            t.GetMethod("SaveMediaStreams", BindingFlags.Public | BindingFlags.Instance));
+
+        if (saveMethod is not null)
+        {
+            var parameters = saveMethod.GetParameters();
+            object?[] args;
+            if (parameters.Length == 3)
+            {
+                args = new object?[] { itemId, streams, cancellationToken };
+            }
+            else if (parameters.Length == 2)
+            {
+                args = new object?[] { itemId, streams };
+            }
+            else
+            {
+                return;
+            }
+
+            try
+            {
+                var result = saveMethod.Invoke(repository, args);
+                if (result is Task task)
+                {
+                    await task.ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -2600,7 +2702,7 @@ public static class ItemRepositoryExtensions
                 var result = saveMethod.Invoke(repository, args);
                 if (result is Task task)
                 {
-                    task.GetAwaiter().GetResult();
+                    task.ConfigureAwait(false).GetAwaiter().GetResult();
                 }
             }
             catch

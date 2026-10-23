@@ -4,9 +4,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>QuickSTRM</RootNamespace>
     <AssemblyName>QuickSTRM</AssemblyName>
-    <Version>4.2.9</Version>
-    <AssemblyVersion>4.2.9</AssemblyVersion>
-    <FileVersion>4.2.9</FileVersion>
+    <Version>4.2.10</Version>
+    <AssemblyVersion>4.2.10</AssemblyVersion>
+    <FileVersion>4.2.10</FileVersion>
     <Authors>Bizarrelego</Authors>
     <RepositoryUrl>https://github.com/Bizarrelego/Jellyfin-QuickSTRM</RepositoryUrl>
     <PackageProjectUrl>https://github.com/Bizarrelego/Jellyfin-QuickSTRM</PackageProjectUrl>
