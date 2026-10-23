@@ -96,7 +96,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTime> _failedPersistCache = new();
 
     // in-flight probe coalescing to avoid duplicate ffprobe or hold-open loops across concurrent callers
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, Task<bool>> _inflightProbes = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, Task<MediaInfo?>> _inflightProbes = new();
 
     // Concurrency throttle preventing more than 4 concurrent ffprobe streams against Usenet sockets / Kestrel thread pool
     private static readonly SemaphoreSlim _probeThrottle = new(4, 4);
@@ -1585,9 +1585,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         if (itemId != Guid.Empty && _inflightProbes.TryGetValue(itemId, out var existingTask))
         {
             _logger.LogInformation("QuickSTRM: Awaiting existing in-flight probe for inline item {Id}", itemId);
+            MediaInfo? existingResult = null;
             try
             {
-                await existingTask.ConfigureAwait(false);
+                existingResult = await existingTask.ConfigureAwait(false);
             }
             catch
             {
@@ -1598,21 +1599,22 @@ public sealed class ProbeService : IHostedService, IDisposable
                 source.Container = item.Container;
             }
 
-            return null;
+            return existingResult;
         }
 
-        TaskCompletionSource<bool>? inlineTcs = null;
+        TaskCompletionSource<MediaInfo?>? inlineTcs = null;
         if (itemId != Guid.Empty)
         {
-            inlineTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            inlineTcs = new TaskCompletionSource<MediaInfo?>(TaskCreationOptions.RunContinuationsAsynchronously);
             if (!_inflightProbes.TryAdd(itemId, inlineTcs.Task))
             {
                 if (_inflightProbes.TryGetValue(itemId, out var racedTask))
                 {
                     _logger.LogInformation("QuickSTRM: Awaiting existing in-flight probe for inline item {Id}", itemId);
+                    MediaInfo? racedResult = null;
                     try
                     {
-                        await racedTask.ConfigureAwait(false);
+                        racedResult = await racedTask.ConfigureAwait(false);
                     }
                     catch
                     {
@@ -1623,7 +1625,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                         source.Container = item.Container;
                     }
 
-                    return null;
+                    return racedResult;
                 }
             }
         }
@@ -1659,7 +1661,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             if (itemId != Guid.Empty && inlineTcs is not null)
             {
                 _inflightProbes.TryRemove(itemId, out _);
-                inlineTcs.TrySetResult(mediaInfo != null);
+                inlineTcs.TrySetResult(mediaInfo);
             }
         }
     }
@@ -2401,7 +2403,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             try
             {
                 var existingResult = await existingTask.ConfigureAwait(false);
-                return existingResult && HasStreamInfo(item);
+                return existingResult is not null && HasStreamInfo(item);
             }
             catch
             {
@@ -2409,10 +2411,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
         }
 
-        TaskCompletionSource<bool>? probeTcs = null;
+        TaskCompletionSource<MediaInfo?>? probeTcs = null;
         if (item.Id != Guid.Empty)
         {
-            probeTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            probeTcs = new TaskCompletionSource<MediaInfo?>(TaskCreationOptions.RunContinuationsAsynchronously);
             if (!_inflightProbes.TryAdd(item.Id, probeTcs.Task))
             {
                 if (_inflightProbes.TryGetValue(item.Id, out var racedTask))
@@ -2420,7 +2422,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     try
                     {
                         var racedResult = await racedTask.ConfigureAwait(false);
-                        return racedResult && HasStreamInfo(item);
+                        return racedResult is not null && HasStreamInfo(item);
                     }
                     catch
                     {
@@ -2430,11 +2432,12 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
         }
 
+        MediaInfo? mediaInfo = null;
         var probeOk = false;
         try
         {
             onSlotAcquired?.Invoke();
-            var mediaInfo = await ExecuteCoreProbeAsync(item, timeout, ct).ConfigureAwait(false);
+            mediaInfo = await ExecuteCoreProbeAsync(item, timeout, ct).ConfigureAwait(false);
             probeOk = mediaInfo is not null && HasStreamInfo(item);
             trial.Success = probeOk;
             return probeOk;
@@ -2445,7 +2448,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             if (item.Id != Guid.Empty && probeTcs is not null)
             {
                 _inflightProbes.TryRemove(item.Id, out _);
-                probeTcs.TrySetResult(probeOk);
+                probeTcs.TrySetResult(mediaInfo);
             }
         }
     }

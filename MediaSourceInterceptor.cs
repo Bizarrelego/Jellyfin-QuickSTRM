@@ -70,6 +70,59 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var sources = (await _inner.GetPlaybackMediaSources(
             item, user, allowMediaProbe: false, enablePathSubstitution, cancellationToken).ConfigureAwait(false)).ToList();
 
+        if (sources.Count == 0)
+        {
+            try
+            {
+                var staticSources = _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
+                if (staticSources is not null && staticSources.Count > 0)
+                {
+                    sources.AddRange(staticSources);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "QuickSTRM: Could not retrieve static media sources from inner manager for {Name}", item.Name);
+            }
+        }
+
+        if (sources.Count == 0)
+        {
+            _logger.LogInformation(
+                "QuickSTRM: Inner media source manager returned empty sources for {Name}; synthesizing fallback native source",
+                item.Name);
+
+            string targetUrl = null;
+            try
+            {
+                targetUrl = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+
+            var effectivePath = !string.IsNullOrWhiteSpace(targetUrl) ? targetUrl : item.Path;
+            var isHttp = effectivePath?.StartsWith("http://", StringComparison.OrdinalIgnoreCase) == true ||
+                         effectivePath?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) == true;
+
+            var fallbackSource = new MediaSourceInfo
+            {
+                Id = item.Id.ToString("N"),
+                Path = effectivePath,
+                Protocol = isHttp ? MediaProtocol.Http : MediaProtocol.File,
+                Container = NormalizeContainer(item.Container, effectivePath),
+                MediaStreams = new List<MediaStream>(),
+                Type = MediaSourceType.Default,
+                SupportsProbing = true,
+                RequiresOpening = false,
+                SupportsDirectPlay = true,
+                SupportsDirectStream = true,
+                SupportsTranscoding = true
+            };
+
+            sources.Add(fallbackSource);
+        }
+
         // 1. Strict Interceptor Guard: Evaluate item streams (or existing source streams) for valid video codec
         var itemStreams = GetItemStreams(item);
         if (!HasValidVideoStream(itemStreams))
@@ -771,6 +824,31 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var sources = _inner.GetStaticMediaSources(item, enablePathSubstitution, user);
         if (ProbeService.IsStrmFile(item?.Path))
         {
+            if ((sources is null || sources.Count == 0) && item is not null)
+            {
+                var fallback = new MediaSourceInfo
+                {
+                    Id = item.Id.ToString("N"),
+                    Path = item.Path,
+                    Protocol = item.Path.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? MediaProtocol.Http : MediaProtocol.File,
+                    Container = NormalizeContainer(item.Container, item.Path),
+                    MediaStreams = new List<MediaStream>(),
+                    Type = MediaSourceType.Default,
+                    SupportsProbing = true,
+                    RequiresOpening = false,
+                    SupportsDirectPlay = true,
+                    SupportsDirectStream = true,
+                    SupportsTranscoding = true
+                };
+                var list = new List<MediaSourceInfo> { fallback };
+                EnsureStreamCapabilities(list, item.Id);
+                foreach (var s in list)
+                {
+                    SanitizeDefaultStreamIndices(s);
+                }
+                return list;
+            }
+
             EnsureStreamCapabilities(sources, item?.Id);
             foreach (var s in sources)
             {
@@ -786,6 +864,25 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         if (source is not null && ProbeService.IsStrmFile(item?.Path))
         {
             EnsureStreamCapabilities(source, item?.Id);
+            SanitizeDefaultStreamIndices(source);
+        }
+        else if (source is null && item is not null && ProbeService.IsStrmFile(item.Path))
+        {
+            source = new MediaSourceInfo
+            {
+                Id = item.Id.ToString("N"),
+                Path = item.Path,
+                Protocol = item.Path.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? MediaProtocol.Http : MediaProtocol.File,
+                Container = NormalizeContainer(item.Container, item.Path),
+                MediaStreams = new List<MediaStream>(),
+                Type = MediaSourceType.Default,
+                SupportsProbing = true,
+                RequiresOpening = false,
+                SupportsDirectPlay = true,
+                SupportsDirectStream = true,
+                SupportsTranscoding = true
+            };
+            EnsureStreamCapabilities(source, item.Id);
             SanitizeDefaultStreamIndices(source);
         }
         return source;

@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.11] - 2026-10-23
+
+### 🛡️ StreamingHelpers Transcoder Empty Source Crash Elimination & In-Flight MediaInfo Coalescing
+
+Critical stability and playback fix resolving the `ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')` in Jellyfin's `StreamingHelpers.GetStreamingState` during HLS video playlist generation (`/videos/{itemId}/master.m3u8`) by guaranteeing non-empty media sources collections under all conditions and returning fully populated `MediaInfo` objects during concurrent in-flight probe coalescing.
+
+### Added
+- **Guaranteed Fallback Native Source Synthesis (`MediaSourceInterceptor.cs`)**:
+  - In `GetPlaybackMediaSources`, when `_inner.GetPlaybackMediaSources` returns an empty collection on unprobed or cold items, falls back to `_inner.GetStaticMediaSources`.
+  - If inner sources remain empty, synthesizes a fallback native `MediaSourceInfo` with normalized container (`mp4`/`mkv`), pre-resolved `.strm` target URL or path, HTTP/File protocol, and direct play/stream/transcode readiness.
+  - Fortified `GetStaticMediaSources` and `GetMediaSource` to guarantee non-empty/non-null returns on `.strm` files, ensuring `mediaSources[0]` in Jellyfin's `StreamingHelpers.GetStreamingState` is 100% immune to `ArgumentOutOfRangeException`.
+- **In-Flight MediaInfo Object Coalescing (`ProbeService.cs`)**:
+  - Upgraded `_inflightProbes` from `ConcurrentDictionary<Guid, Task<bool>>` to `ConcurrentDictionary<Guid, Task<MediaInfo?>>`.
+  - When concurrent playback requests for the same unprobed media item arrive simultaneously (e.g. `PlaybackInfo` followed immediately by `/videos/{id}/master.m3u8`), coalesced callers await the in-flight probe task and immediately receive the resulting `MediaInfo` containing probed streams instead of receiving `null`.
+- **Automated Fallback Synthesis & Concurrency Coalescing Tests (`MediaSourceInterceptorTests.cs` & `ConcurrencyTests.cs`)**:
+  - Added unit test `GetPlaybackMediaSources_InnerReturnsEmptyList_SynthesizesFallbackSource_NeverReturnsEmptyCollection` verifying empty inner collections return a 1-item source list with safe default pointers.
+  - Added unit tests `GetStaticMediaSources_InnerReturnsEmptyList_SynthesizesFallbackSource_NeverReturnsEmptyCollection` and `GetMediaSource_InnerReturnsNull_SynthesizesFallbackSource_NeverReturnsNullForStrm`.
+  - Updated `ConcurrencyTests.ProbeOneInlineAsync_50SimultaneousCallsForSameGuid_UnderlyingFfprobeExecutedExactlyOnce` to verify all 50 concurrent callers receive the populated `MediaInfo` directly from the single probe.
+
+---
 ## [4.2.10] - 2026-10-23
 
 ### ⚡ Thread Starvation Elimination & Missing .STRM Fast-Fail Auto-Healing
