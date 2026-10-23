@@ -114,14 +114,23 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             if (!HasValidVideoStream(itemStreams))
             {
                 _logger.LogWarning(
-                    "QuickSTRM: On-demand probe failed or streams remain empty/invalid for {Name}; returning Enumerable.Empty to prevent transcoder crash",
+                    "QuickSTRM: On-demand probe failed or streams remain unprobed for {Name}; continuing with sanitized native source",
                     item.Name);
-                return Array.Empty<MediaSourceInfo>();
             }
         }
 
         // Populate MediaStreams from SQLite / in-memory cache if available and normalize
         EnsureStreamCapabilities(sources, item.Id, itemStreams);
+
+        foreach (var s in sources)
+        {
+            NormalizeMediaSourceInfo(s);
+            if (user is not null)
+            {
+                _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
+            }
+            SanitizeDefaultStreamIndices(s);
+        }
 
         var completeSources = sources.Where(HasCompleteMediaStreams).ToList();
         if (completeSources.Count > 0)
@@ -129,26 +138,15 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             _logger.LogDebug(
                 "QuickSTRM: Item {Name} has complete video and audio streams; returning normalized MediaSourceInfo",
                 item.Name);
-
-            foreach (var s in completeSources)
-            {
-                NormalizeMediaSourceInfo(s);
-                if (user is not null)
-                {
-                    _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
-                    SanitizeDefaultStreamIndices(s);
-                }
-            }
-
             return completeSources;
         }
 
         if (!allowMediaProbe)
         {
             _logger.LogDebug(
-                "QuickSTRM: Item {Name} lacks complete streams and probing is disallowed; returning Enumerable.Empty to fall back safely",
+                "QuickSTRM: Item {Name} unprobed or probing disallowed; returning sanitized native sources to prevent transcoder crash",
                 item.Name);
-            return Array.Empty<MediaSourceInfo>();
+            return sources;
         }
 
         // only this rare first-play path pays for an async state machine, because it must await the capped probe
@@ -189,21 +187,17 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             if (targets.Count == 0)
             {
                 EnsureStreamCapabilities(resolved, item.Id);
-                var validSources = resolved.Where(HasCompleteMediaStreams).ToList();
-                if (validSources.Count > 0)
+                foreach (var s in resolved)
                 {
-                    foreach (var s in validSources)
+                    NormalizeMediaSourceInfo(s);
+                    if (user is not null)
                     {
-                        NormalizeMediaSourceInfo(s);
-                        if (user is not null)
-                        {
-                            _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
-                            SanitizeDefaultStreamIndices(s);
-                        }
+                        _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
                     }
-                    return validSources;
+                    SanitizeDefaultStreamIndices(s);
                 }
-                return Array.Empty<MediaSourceInfo>();
+                var validSources = resolved.Where(HasCompleteMediaStreams).ToList();
+                return validSources.Count > 0 ? validSources : resolved;
             }
 
             // improves efficiency: from here on the item is unprobed in the database, so it must be persisted whether the inline
@@ -219,41 +213,33 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 // the pipeline admits exactly one half-open trial that must fully succeed in ffprobe before the circuit closes
                 probeService.EnqueueBackgroundPersist(item, highPriority: true);
                 EnsureStreamCapabilities(resolved, item.Id);
-                var validSources = resolved.Where(HasCompleteMediaStreams).ToList();
-                if (validSources.Count > 0)
+                foreach (var s in resolved)
                 {
-                    foreach (var s in validSources)
+                    NormalizeMediaSourceInfo(s);
+                    if (user is not null)
                     {
-                        NormalizeMediaSourceInfo(s);
-                        if (user is not null)
-                        {
-                            _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
-                            SanitizeDefaultStreamIndices(s);
-                        }
+                        _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
                     }
-                    return validSources;
+                    SanitizeDefaultStreamIndices(s);
                 }
-                return Array.Empty<MediaSourceInfo>();
+                var validSources = resolved.Where(HasCompleteMediaStreams).ToList();
+                return validSources.Count > 0 ? validSources : resolved;
             }
 
             if (!await probeService.PreflightAsync(item, cancellationToken).ConfigureAwait(false))
             {
                 EnsureStreamCapabilities(resolved, item.Id);
-                var validSources = resolved.Where(HasCompleteMediaStreams).ToList();
-                if (validSources.Count > 0)
+                foreach (var s in resolved)
                 {
-                    foreach (var s in validSources)
+                    NormalizeMediaSourceInfo(s);
+                    if (user is not null)
                     {
-                        NormalizeMediaSourceInfo(s);
-                        if (user is not null)
-                        {
-                            _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
-                            SanitizeDefaultStreamIndices(s);
-                        }
+                        _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
                     }
-                    return validSources;
+                    SanitizeDefaultStreamIndices(s);
                 }
-                return Array.Empty<MediaSourceInfo>();
+                var validSources = resolved.Where(HasCompleteMediaStreams).ToList();
+                return validSources.Count > 0 ? validSources : resolved;
             }
 
             // protects the Core i3 from latency spikes: every source shares ONE budget and the 2-process gate, and the
@@ -305,25 +291,26 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         }
 
         EnsureStreamCapabilities(resolved, item.Id);
+        foreach (var s in resolved)
+        {
+            NormalizeMediaSourceInfo(s);
+            if (user is not null)
+            {
+                _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
+            }
+            SanitizeDefaultStreamIndices(s);
+        }
+
         var complete = resolved.Where(HasCompleteMediaStreams).ToList();
         if (complete.Count > 0)
         {
-            foreach (var s in complete)
-            {
-                NormalizeMediaSourceInfo(s);
-                if (user is not null)
-                {
-                    _inner.SetDefaultAudioAndSubtitleStreamIndices(item, s, user);
-                    SanitizeDefaultStreamIndices(s);
-                }
-            }
             return complete;
         }
 
         _logger.LogInformation(
-            "QuickSTRM: Item {Name} does not have complete video and audio streams; returning empty sources so Jellyfin native playback pipeline resolves .strm natively",
+            "QuickSTRM: Item {Name} does not have complete video and audio streams; returning sanitized native sources to prevent transcoder crash",
             item.Name);
-        return Array.Empty<MediaSourceInfo>();
+        return resolved;
     }
 
     public static string NormalizeContainer(string container, string path = null)
@@ -454,7 +441,12 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     /// </summary>
     public static void SanitizeDefaultStreamIndices(MediaSourceInfo source)
     {
-        if (source?.MediaStreams is null || source.MediaStreams.Count == 0)
+        if (source is null)
+        {
+            return;
+        }
+
+        if (source.MediaStreams is null || source.MediaStreams.Count == 0)
         {
             source.DefaultAudioStreamIndex = null;
             source.DefaultSubtitleStreamIndex = null;
@@ -468,7 +460,8 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             var idx = source.DefaultAudioStreamIndex.Value;
             selectedAudio = source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Audio && s.Index == idx);
         }
-        selectedAudio ??= source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Audio);
+        selectedAudio ??= source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Audio && s.IsDefault)
+                          ?? source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Audio);
 
         MediaStream selectedSubtitle = null;
         if (source.DefaultSubtitleStreamIndex.HasValue)
@@ -596,28 +589,31 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             return;
         }
 
-        // Only query SQLite / memory if source.MediaStreams is not already populated
-        if (source.MediaStreams == null || source.MediaStreams.Count == 0)
+        // Populate video/audio streams if source lacks a valid video stream
+        if (source.MediaStreams == null || source.MediaStreams.Count == 0 || !HasValidVideoStream(source.MediaStreams))
         {
-            if (fallbackStreams is not null && fallbackStreams.Count > 0)
+            var existingSubtitles = source.MediaStreams?.Where(s => s.Type == MediaStreamType.Subtitle).ToList();
+
+            IReadOnlyList<MediaStream> targetStreams = null;
+            if (fallbackStreams is not null && HasValidVideoStream(fallbackStreams))
             {
-                source.MediaStreams = fallbackStreams is List<MediaStream> list ? list : new List<MediaStream>(fallbackStreams);
+                targetStreams = fallbackStreams;
             }
             else if (itemId.HasValue)
             {
                 var probeService = _probeServiceFactory?.Invoke();
-                if (probeService is not null && probeService.InMemoryStreams.TryGetValue(itemId.Value, out var memStreams) && memStreams.Count > 0)
+                if (probeService is not null && probeService.InMemoryStreams.TryGetValue(itemId.Value, out var memStreams) && HasValidVideoStream(memStreams))
                 {
-                    source.MediaStreams = memStreams is List<MediaStream> memList ? memList : new List<MediaStream>(memStreams);
+                    targetStreams = memStreams;
                 }
                 else
                 {
                     try
                     {
                         var streams = _inner.GetMediaStreams(itemId.Value);
-                        if (streams is not null && streams.Count > 0)
+                        if (streams is not null && HasValidVideoStream(streams))
                         {
-                            source.MediaStreams = streams is List<MediaStream> list ? list : new List<MediaStream>(streams);
+                            targetStreams = streams;
                         }
                     }
                     catch (Exception ex)
@@ -626,15 +622,28 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                     }
                 }
             }
+
+            if (targetStreams is not null && targetStreams.Count > 0)
+            {
+                var merged = new List<MediaStream>(targetStreams);
+                if (existingSubtitles is not null && existingSubtitles.Count > 0)
+                {
+                    foreach (var sub in existingSubtitles)
+                    {
+                        if (!merged.Any(m => m.Type == MediaStreamType.Subtitle && m.Index == sub.Index))
+                        {
+                            merged.Add(sub);
+                        }
+                    }
+                }
+                source.MediaStreams = merged;
+            }
         }
 
-        if (HasCompleteMediaStreams(source))
-        {
-            NormalizeMediaSourceInfo(source);
-            source.SupportsDirectPlay = true;
-            source.SupportsDirectStream = true;
-            source.SupportsTranscoding = true;
-        }
+        NormalizeMediaSourceInfo(source);
+        source.SupportsDirectPlay = true;
+        source.SupportsDirectStream = true;
+        source.SupportsTranscoding = true;
     }
 
     private void EnsureStreamCapabilities(IEnumerable<MediaSourceInfo> sources, Guid? itemId = null, IReadOnlyList<MediaStream> fallbackStreams = null)
