@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.8] - 2026-10-23
+
+### 🚀 Inline On-Demand Probing Resilience & Coalesced In-Flight Stream Resolution
+
+Critical playback fix resolving on-demand probe failures during initial .strm playback by coalescing concurrent in-flight probe tasks to return media info directly, isolating inline playback probes from transient client socket cancellations, bypassing background gate throttles during playback, extracting container formats from URL query strings, and evaluating probed streams without premature rejection.
+
+### Added
+- **In-Flight Probe Coalescing (`ProbeService.cs`)**:
+  - Upgraded `_inflightProbes` from `ConcurrentDictionary<Guid, Task<bool>>` to `ConcurrentDictionary<Guid, Task<MediaInfo?>>`.
+  - When debounced or parallel playback queries hit the same unprobed item concurrently, they coalesce on the single in-flight probe task and immediately receive the resulting `MediaInfo` instead of returning `null`.
+- **Decoupled Playback Socket Lifecycles (`ProbeService.cs`)**:
+  - `ProbeOneInlineAsync` allocates an independent 8-second probe token, protecting ongoing probes and SQLite stream persistence from transient client socket drops or abortive pre-request handshakes.
+- **Playback Probe Gate Bypass (`ProbeService.cs`)**:
+  - Playback inline probes bypass `_probeGate` to prevent high-priority playback starts from queuing behind lower-priority background tasks.
+- **Infinidysk & Query Parameter Container Normalization (`MediaSourceInterceptor.NormalizeContainer`)**:
+  - Parses `extension=` and `format=` query parameters via zero-allocation span slicing for URLs lacking file extensions in their path (e.g. `http://.../view/.ids/...?...&extension=mkv`).
+- **Refined Interceptor Stream Guards (`MediaSourceInterceptor.cs`)**:
+  - Accepts `probeResult?.MediaStreams` directly when valid video streams are present, preventing premature `Enumerable.Empty` rejections for newly probed items.
+- **Automated Inline Probe & URL Query Extension Tests (`MediaSourceInterceptorTests.cs`)**:
+  - Added `NormalizeContainer_InfinidyskUrlWithQueryExtension_ExtractsExtension` verifying query parameter extension parsing.
+  - Added `GetPlaybackMediaSources_UnprobedItem_InlineProbeSucceedsWithValidVideoStream_ReturnsCompleteSources` verifying newly probed items return complete media sources without being dropped.
+
+---
 ## [4.2.7] - 2026-10-23
 
 ### 🛡️ Transcoder Out-Of-Bounds Elimination & Strict Interceptor Guards

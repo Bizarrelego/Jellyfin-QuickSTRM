@@ -1,4 +1,5 @@
-<div id="QuickStrmConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/QuickStrm.js">
+<div id="QuickStrmConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
+    data-controller="__plugin/QuickStrm.js">
     <div class="content-primary" style="max-width: 980px; margin: 0 auto; padding: 1.5em 1em;">
         <style>
             .quickstrm-tab-bar {
@@ -11,6 +12,7 @@
                 -webkit-overflow-scrolling: touch;
                 scrollbar-width: none;
             }
+
             .quickstrm-tab-bar::-webkit-scrollbar {
                 display: none;
             }
@@ -31,11 +33,13 @@
                 transition: all 0.2s ease;
                 outline: none;
             }
+
             .quickstrm-tab-btn:hover {
                 background: rgba(255, 255, 255, 0.08);
                 color: var(--text-color, #fff);
                 transform: translateY(-1px);
             }
+
             .quickstrm-tab-btn.active {
                 background: var(--theme-primary-color, #00a4dc);
                 color: #fff;
@@ -61,6 +65,7 @@
                 box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
                 transition: transform 0.2s ease, box-shadow 0.2s ease;
             }
+
             .quickstrm-metric-card:hover {
                 transform: translateY(-2px);
                 box-shadow: 0 4px 8px rgba(0, 0, 0, 0.25);
@@ -99,6 +104,7 @@
                 margin-bottom: 1em;
                 transition: border-color 0.2s ease, box-shadow 0.2s ease;
             }
+
             .quickstrm-arr-card:hover {
                 border-color: rgba(255, 255, 255, 0.16);
                 box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
@@ -135,11 +141,13 @@
                 color: #64b5f6;
                 border: 1px solid #2196f3;
             }
+
             .quickstrm-badge-sonarr {
                 background: rgba(0, 188, 212, 0.15);
                 color: #4dd0e1;
                 border: 1px solid #00bcd4;
             }
+
             .quickstrm-badge-whisparr {
                 background: rgba(156, 39, 176, 0.15);
                 color: #ba68c8;
@@ -180,11 +188,13 @@
                 align-items: center;
                 gap: 0.6em;
             }
+
             .quickstrm-inline-feedback.success {
                 background: rgba(76, 175, 80, 0.15);
                 border: 1px solid #4caf50;
                 color: #c8e6c9;
             }
+
             .quickstrm-inline-feedback.error {
                 background: rgba(244, 67, 54, 0.15);
                 border: 1px solid #f44336;
@@ -202,21 +212,28 @@
             .quickstrm-tab-content {
                 display: none;
             }
+
             .quickstrm-tab-panel.active,
             .quickstrm-tab-content.active {
                 display: block;
             }
 
             @keyframes quickstrm-spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
+                0% {
+                    transform: rotate(0deg);
+                }
+
+                100% {
+                    transform: rotate(360deg);
+                }
             }
+
             .quickstrm-btn-spinner,
             .quickstrm-spinner {
                 display: inline-block;
                 width: 14px;
                 height: 14px;
-                border: 2px solid rgba(255,255,255,0.3);
+                border: 2px solid rgba(255, 255, 255, 0.3);
                 border-top-color: white;
                 border-radius: 50%;
                 animation: quickstrm-spin 0.8s linear infinite;
@@ -226,19 +243,32 @@
             }
 
             @keyframes quickstrm-indeterminate {
-                0% { transform: translateX(-100%); width: 30%; }
-                50% { transform: translateX(100%); width: 60%; }
-                100% { transform: translateX(350%); width: 30%; }
+                0% {
+                    transform: translateX(-100%);
+                    width: 30%;
+                }
+
+                50% {
+                    transform: translateX(100%);
+                    width: 60%;
+                }
+
+                100% {
+                    transform: translateX(350%);
+                    width: 30%;
+                }
             }
 
             .taskProgress {
                 position: relative;
                 overflow: hidden;
             }
+
             .taskProgressInner {
                 transition: width 0.25s ease;
                 transform: none;
             }
+
             .taskProgressInner.indeterminate {
                 width: 30% !important;
                 animation: quickstrm-indeterminate 1.5s infinite linear;
@@ -251,11 +281,13 @@
                 height: 24px;
                 flex-shrink: 0;
             }
+
             .qs-switch input {
                 opacity: 0;
                 width: 0;
                 height: 0;
             }
+
             .qs-slider {
                 position: absolute;
                 cursor: pointer;
@@ -267,6 +299,7 @@
                 transition: .25s ease;
                 border-radius: 24px;
             }
+
             .qs-slider:before {
                 position: absolute;
                 content: "";
@@ -278,12 +311,15 @@
                 transition: .25s ease;
                 border-radius: 50%;
             }
-            input:checked + .qs-slider {
+
+            input:checked+.qs-slider {
                 background-color: var(--theme-primary-color, #00a4dc);
             }
-            input:checked + .qs-slider:before {
+
+            input:checked+.qs-slider:before {
                 transform: translateX(20px);
             }
+
             .qs-saved-badge {
                 font-size: 0.72em;
                 font-weight: 600;
@@ -296,6 +332,7 @@
                 transition: opacity 0.25s ease;
                 letter-spacing: 0.03em;
             }
+
             .qs-saved-badge.visible {
                 opacity: 1;
             }
@@ -308,6 +345,7 @@
                 user-select: none;
                 padding: 8px 0;
             }
+
             .qs-checkbox {
                 width: 18px;
                 height: 18px;
@@ -322,14 +360,17 @@
                 .quickstrm-metrics-grid {
                     grid-template-columns: 1fr;
                 }
+
                 .quickstrm-form-row {
                     grid-template-columns: 1fr;
                     gap: 0.8em;
                 }
+
                 .quickstrm-card-header {
                     flex-direction: column;
                     align-items: flex-start !important;
                 }
+
                 .quickstrm-card-actions {
                     width: 100%;
                     margin-top: 0.8em;
@@ -340,12 +381,14 @@
 
         <!-- Page Header -->
         <div class="verticalSection" style="margin-bottom: 1.5em;">
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em;">
+            <div
+                style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em;">
                 <div>
                     <h2 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">bolt</span>
                         QuickSTRM Management Suite
-                        <span class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v4.2.0</span>
+                        <span class="quickstrm-badge"
+                            style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4); font-size: 0.72em; margin-left: 0.4em;">v4.2.8</span>
                     </h2>
                     <div style="font-size: 0.9em; color: var(--text-muted-color, #888); margin-top: 0.2em;">
                         Zero-Touch Playback Acceleration, Auto-Heal List Feeds &amp; Library Telemetry
@@ -387,33 +430,41 @@
 
         <!-- Segmented Pill-Tab Navigation Bar -->
         <div class="quickstrm-tab-bar">
-            <button type="button" class="quickstrm-tab-btn active" data-tab="tab-overview" onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-overview');}else{var v=this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
+            <button type="button" class="quickstrm-tab-btn active" data-tab="tab-overview"
+                onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-overview');}else{var v=this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
                 <span class="material-icons" style="font-size: 1.1em;">dashboard</span>
                 <span>Overview &amp; Probing</span>
             </button>
-            <button type="button" class="quickstrm-tab-btn" data-tab="tab-arr" onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-arr');}else{var v=this.closest('#QuickSTRMConfigPage')||this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
+            <button type="button" class="quickstrm-tab-btn" data-tab="tab-arr"
+                onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-arr');}else{var v=this.closest('#QuickSTRMConfigPage')||this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
                 <span class="material-icons" style="font-size: 1.1em;">healing</span>
                 <span>Auto-Heal Lists</span>
             </button>
-            <button type="button" class="quickstrm-tab-btn" data-tab="tab-maintenance" onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-maintenance');}else{var v=this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
+            <button type="button" class="quickstrm-tab-btn" data-tab="tab-maintenance"
+                onclick="if(window.QuickStrmSwitchTab){window.QuickStrmSwitchTab(this,'tab-maintenance');}else{var v=this.closest('#QuickStrmConfigPage'); v.querySelectorAll('.quickstrm-tab-btn').forEach(function(b){b.classList.remove('active');}); this.classList.add('active'); v.querySelectorAll('.quickstrm-tab-panel').forEach(function(p){p.classList.remove('active'); p.style.display='none';}); var t=v.querySelector('#'+this.getAttribute('data-tab')); if(t){t.classList.add('active'); t.style.display='block';}}">
                 <span class="material-icons" style="font-size: 1.1em;">tune</span>
                 <span>Maintenance &amp; Advanced</span>
             </button>
         </div>
 
         <!-- Circuit Breaker Tripped Alert Banner (Global) -->
-        <div id="circuitBreakerBanner" class="paperList" style="display: none; background: rgba(183, 28, 28, 0.25); border: 1px solid #e53935; border-radius: 8px; padding: 1.2em; margin-bottom: 1.8em; color: #ffcdd2;">
-            <div style="font-weight: 600; font-size: 1.05em; margin-bottom: 0.3em; display: flex; align-items: center; gap: 0.4em;">
+        <div id="circuitBreakerBanner" class="paperList"
+            style="display: none; background: rgba(183, 28, 28, 0.25); border: 1px solid #e53935; border-radius: 8px; padding: 1.2em; margin-bottom: 1.8em; color: #ffcdd2;">
+            <div
+                style="font-weight: 600; font-size: 1.05em; margin-bottom: 0.3em; display: flex; align-items: center; gap: 0.4em;">
                 <span class="material-icons" style="color: #ef5350;">warning</span>
                 Circuit Breaker Tripped
             </div>
-            <div>Consecutive probe failures exceeded the safety threshold. Queue processing and auto-deletion are halted to protect system resources.</div>
+            <div>Consecutive probe failures exceeded the safety threshold. Queue processing and auto-deletion are halted
+                to protect system resources.</div>
             <div id="circuitBreakerStatus" style="margin-top: 0.5em; font-weight: 500;"></div>
             <div style="margin-top: 0.8em; display: flex; align-items: center; gap: 0.8em; flex-wrap: wrap;">
-                <button is="emby-button" type="button" id="btnResetCircuitBreaker" class="raised emby-button" style="margin: 0; background: #e53935; color: white;">
+                <button is="emby-button" type="button" id="btnResetCircuitBreaker" class="raised emby-button"
+                    style="margin: 0; background: #e53935; color: white;">
                     <span>Reset Circuit Breaker</span>
                 </button>
-                <span style="font-size: 0.85em; opacity: 0.85;">Recovery is also automatic once cloud mounts are reachable.</span>
+                <span style="font-size: 0.85em; opacity: 0.85;">Recovery is also automatic once cloud mounts are
+                    reachable.</span>
             </div>
         </div>
 
@@ -426,7 +477,8 @@
                     <div class="quickstrm-metric-title">Circuit State</div>
                     <div id="statCircuitState" class="quickstrm-metric-value" style="color: #4caf50;">Closed</div>
                     <div id="metricCircuitSub" class="quickstrm-metric-sub">Normal Operation</div>
-                    <button is="emby-button" type="button" id="btnResetBreaker" class="raised emby-button" style="display: none; margin: 0.4em auto 0; padding: 0.2em 0.6em; font-size: 0.72em; background: #e53935; color: white; border-radius: 4px;">
+                    <button is="emby-button" type="button" id="btnResetBreaker" class="raised emby-button"
+                        style="display: none; margin: 0.4em auto 0; padding: 0.2em 0.6em; font-size: 0.72em; background: #e53935; color: white; border-radius: 4px;">
                         <span>Reset Breaker</span>
                     </button>
                 </div>
@@ -462,16 +514,20 @@
 
             <!-- 2. Manual Library Pre-Probing -->
             <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-                <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1em; display: flex; align-items: center; gap: 0.4em;">
+                <h3 class="sectionTitle"
+                    style="margin-top: 0; margin-bottom: 1em; display: flex; align-items: center; gap: 0.4em;">
                     <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">play_circle</span>
                     Manual Library Pre-Probing
                 </h3>
 
                 <!-- Secondary Metrics Breakdown -->
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08)); text-align: center;">
+                <div
+                    style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1em; padding-bottom: 1.2em; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08)); text-align: center;">
                     <div>
-                        <div style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-bottom: 0.2em;">Total .strm Media</div>
-                        <div id="lblSummaryTotal" style="font-size: 1.5em; font-weight: 600; color: var(--text-color, #fff);">-</div>
+                        <div style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-bottom: 0.2em;">Total
+                            .strm Media</div>
+                        <div id="lblSummaryTotal"
+                            style="font-size: 1.5em; font-weight: 600; color: var(--text-color, #fff);">-</div>
                     </div>
                     <div>
                         <div style="font-size: 0.8em; color: #81c784; margin-bottom: 0.2em;">Has Stream Info</div>
@@ -484,7 +540,9 @@
                     <div>
                         <div style="font-size: 0.8em; color: #64b5f6; margin-bottom: 0.2em;">Persistence Queue</div>
                         <div id="lblSummaryQueue" style="font-size: 1.5em; font-weight: 600; color: #2196f3;">-</div>
-                        <div id="lblSummaryQueueDetail" style="font-size: 0.7em; color: var(--text-muted-color, #777); margin-top: 0.2em;">0 waiting / 0 running</div>
+                        <div id="lblSummaryQueueDetail"
+                            style="font-size: 0.7em; color: var(--text-muted-color, #777); margin-top: 0.2em;">0 waiting
+                            / 0 running</div>
                     </div>
                 </div>
 
@@ -496,31 +554,39 @@
                             <option value="All">All items (Full probe)</option>
                         </select>
                     </div>
-                    <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit emby-button" style="margin: 0; min-width: 140px;">
+                    <button is="emby-button" type="button" id="btnStartProbe" class="raised button-submit emby-button"
+                        style="margin: 0; min-width: 140px;">
                         <span>Start pre-probe</span>
                     </button>
-                    <button is="emby-button" type="button" id="btnCancelScan" class="raised emby-button" style="margin: 0; min-width: 110px; display: none; background: #b71c1c; color: white;">
+                    <button is="emby-button" type="button" id="btnCancelScan" class="raised emby-button"
+                        style="margin: 0; min-width: 110px; display: none; background: #b71c1c; color: white;">
                         <span>Cancel Scan</span>
                     </button>
-                    <button is="emby-button" type="button" id="btnStopProbe" class="raised emby-button" style="margin: 0; min-width: 100px; display: none; background: #b71c1c; color: white;">
+                    <button is="emby-button" type="button" id="btnStopProbe" class="raised emby-button"
+                        style="margin: 0; min-width: 100px; display: none; background: #b71c1c; color: white;">
                         <span>Stop</span>
                     </button>
-                    <button is="emby-button" type="button" id="btnResetFailureCache" class="raised emby-button" title="Flush negative cache of failed background probes" style="margin: 0;">
+                    <button is="emby-button" type="button" id="btnResetFailureCache" class="raised emby-button"
+                        title="Flush negative cache of failed background probes" style="margin: 0;">
                         <span>Reset Failure Cache</span>
                     </button>
                 </div>
 
                 <!-- Live Progress Area -->
                 <div id="probeProgressContainer" class="probeProgressSection" style="margin-top: 1.5em;">
-                    <div style="font-size: 0.85em; margin-bottom: 0.5em; display: flex; justify-content: space-between;">
+                    <div
+                        style="font-size: 0.85em; margin-bottom: 0.5em; display: flex; justify-content: space-between;">
                         <span id="probeStatusText" style="color: var(--text-muted-color, #999);">Status: Idle</span>
                     </div>
 
-                    <div class="taskProgress" style="background: rgba(0,0,0,0.2); height: 5px; border-radius: 3px; overflow: hidden; position: relative;">
-                        <div id="probeProgressBar" class="taskProgressInner" style="background: var(--theme-primary-color); height: 100%; width: 0%;"></div>
+                    <div class="taskProgress"
+                        style="background: rgba(0,0,0,0.2); height: 5px; border-radius: 3px; overflow: hidden; position: relative;">
+                        <div id="probeProgressBar" class="taskProgressInner"
+                            style="background: var(--theme-primary-color); height: 100%; width: 0%;"></div>
                     </div>
 
-                    <div id="probeItemText" style="font-size: 0.8em; color: var(--text-muted-color, #777); margin-top: 0.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    <div id="probeItemText"
+                        style="font-size: 0.8em; color: var(--text-muted-color, #777); margin-top: 0.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                         Probing: <span id="lblCurrentItem" style="color: var(--text-color, #bbb);">-</span>
                     </div>
                 </div>
@@ -528,16 +594,19 @@
 
             <!-- 3. Recent Actions Ledger -->
             <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
+                <div
+                    style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
                     <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">history</span>
                         Recent Actions Ledger
                     </h3>
                     <div style="display: flex; gap: 0.5em; flex-wrap: wrap;">
-                        <button is="emby-button" type="button" id="btnClearLedger" class="raised emby-button" style="margin: 0; background: #b71c1c; color: white;">
+                        <button is="emby-button" type="button" id="btnClearLedger" class="raised emby-button"
+                            style="margin: 0; background: #b71c1c; color: white;">
                             <span>Clear History</span>
                         </button>
-                        <button is="emby-button" type="button" id="btnRefreshLedger" class="raised emby-button" style="margin: 0;">
+                        <button is="emby-button" type="button" id="btnRefreshLedger" class="raised emby-button"
+                            style="margin: 0;">
                             <span>Refresh Ledger</span>
                         </button>
                     </div>
@@ -545,7 +614,8 @@
                 <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
                     Live activity log showing the last 100 auto-heal, circuit breaker, and probe telemetry events.
                 </div>
-                <div id="recentActionsList" class="paperList" style="max-height: 250px; overflow-y: auto; padding: 1em; border-radius: 6px; background: rgba(0, 0, 0, 0.2); font-family: monospace; font-size: 0.85em; line-height: 1.6;">
+                <div id="recentActionsList" class="paperList"
+                    style="max-height: 250px; overflow-y: auto; padding: 1em; border-radius: 6px; background: rgba(0, 0, 0, 0.2); font-family: monospace; font-size: 0.85em; line-height: 1.6;">
                     <div style="color: var(--text-muted-color, #777);">Loading recent actions...</div>
                 </div>
             </div>
@@ -554,35 +624,49 @@
         <!-- ==================== TAB 2: AUTO-HEAL LISTS ==================== -->
         <div id="tab-arr" class="quickstrm-tab-panel quickstrm-tab-content" style="display: none;">
             <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
+                <div
+                    style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.8em;">
                     <h3 class="sectionTitle" style="margin: 0; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">healing</span>
                         Native Auto-Heal List Feeds
                     </h3>
                     <div style="display: flex; gap: 0.5em; align-items: center;">
-                        <button is="emby-button" type="button" id="btnRefreshAutoHealFeeds" class="raised emby-button" style="margin: 0; padding: 0.45em 0.9em;">
+                        <button is="emby-button" type="button" id="btnRefreshAutoHealFeeds" class="raised emby-button"
+                            style="margin: 0; padding: 0.45em 0.9em;">
                             <span class="material-icons" style="font-size: 16px; margin-right: 4px;">refresh</span>
                             <span>Refresh Feeds</span>
                         </button>
                     </div>
                 </div>
-                <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.6em; line-height: 1.5;">
-                    Zero-overhead, pull-based list feeds for Radarr and Sonarr. When dead .strm links (404/503) are pruned, their IDs are immediately published here for native *arr Custom List ingestion. Feeds are <strong>self-cleaning</strong>: entries are automatically removed the moment they are re-added to Jellyfin, and stale entries automatically expire after 7 days.
+                <div
+                    style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.6em; line-height: 1.5;">
+                    Zero-overhead, pull-based list feeds for Radarr and Sonarr. When dead .strm links (404/503) are
+                    pruned, their IDs are immediately published here for native *arr Custom List ingestion. Feeds are
+                    <strong>self-cleaning</strong>: entries are automatically removed the moment they are re-added to
+                    Jellyfin, and stale entries automatically expire after 7 days.
                 </div>
 
                 <!-- Feed Cards Grid -->
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5em; margin-bottom: 1.8em;">
+                <div
+                    style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5em; margin-bottom: 1.8em;">
                     <!-- Radarr Feed Card -->
-                    <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.08)); border-radius: 8px; padding: 1.4em; display: flex; flex-direction: column; justify-content: space-between;">
+                    <div
+                        style="background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.08)); border-radius: 8px; padding: 1.4em; display: flex; flex-direction: column; justify-content: space-between;">
                         <div>
-                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8em;">
+                            <div
+                                style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8em;">
                                 <div style="display: flex; align-items: center; gap: 0.5em;">
-                                    <span class="quickstrm-badge" style="background: #2196f3; color: white; font-weight: bold; padding: 0.3em 0.7em;">RADARR</span>
-                                    <span style="font-weight: 600; font-size: 1.05em; color: var(--text-color, #fff);">Movie Recovery Feed</span>
+                                    <span class="quickstrm-badge"
+                                        style="background: #2196f3; color: white; font-weight: bold; padding: 0.3em 0.7em;">RADARR</span>
+                                    <span
+                                        style="font-weight: 600; font-size: 1.05em; color: var(--text-color, #fff);">Movie
+                                        Recovery Feed</span>
                                 </div>
                                 <div>
-                                    <span id="lblAutoHealRadarrCount" style="font-size: 1.4em; font-weight: bold; color: #2196f3;">0</span>
-                                    <span style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-left: 2px;">queued</span>
+                                    <span id="lblAutoHealRadarrCount"
+                                        style="font-size: 1.4em; font-weight: bold; color: #2196f3;">0</span>
+                                    <span
+                                        style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-left: 2px;">queued</span>
                                 </div>
                             </div>
                             <div style="font-size: 0.84em; color: var(--text-muted-color, #aaa); margin-bottom: 1em;">
@@ -591,30 +675,43 @@
                             <div class="inputContainer" style="margin-bottom: 0.8em;">
                                 <label class="inputLabel" for="txtRadarrFeedUrl">Radarr List URL</label>
                                 <div style="display: flex; gap: 6px; align-items: center;">
-                                    <input is="emby-input" type="text" id="txtRadarrFeedUrl" readonly class="emby-input" style="flex: 1; font-family: monospace; font-size: 0.85em; background: rgba(0,0,0,0.4);" />
-                                    <button is="emby-button" type="button" id="btnCopyRadarrUrl" class="raised emby-button" style="margin: 0; padding: 0.5em 0.85em; white-space: nowrap;">
-                                        <span class="material-icons" style="font-size: 15px; margin-right: 4px;">content_copy</span>
+                                    <input is="emby-input" type="text" id="txtRadarrFeedUrl" readonly class="emby-input"
+                                        style="flex: 1; font-family: monospace; font-size: 0.85em; background: rgba(0,0,0,0.4);" />
+                                    <button is="emby-button" type="button" id="btnCopyRadarrUrl"
+                                        class="raised emby-button"
+                                        style="margin: 0; padding: 0.5em 0.85em; white-space: nowrap;">
+                                        <span class="material-icons"
+                                            style="font-size: 15px; margin-right: 4px;">content_copy</span>
                                         <span>Copy</span>
                                     </button>
                                 </div>
                             </div>
                         </div>
-                        <div style="background: rgba(33, 150, 243, 0.08); border-left: 3px solid #2196f3; border-radius: 4px; padding: 0.6em 0.8em; font-size: 0.8em; color: #bbdefb; margin-top: 0.8em; line-height: 1.4;">
-                            <strong>Radarr Setup:</strong> Settings → Lists → Add (+) → Custom List → Paste URL above → Clean Library: Keep
+                        <div
+                            style="background: rgba(33, 150, 243, 0.08); border-left: 3px solid #2196f3; border-radius: 4px; padding: 0.6em 0.8em; font-size: 0.8em; color: #bbdefb; margin-top: 0.8em; line-height: 1.4;">
+                            <strong>Radarr Setup:</strong> Settings → Lists → Add (+) → Custom List → Paste URL above →
+                            Clean Library: Keep
                         </div>
                     </div>
 
                     <!-- Sonarr Feed Card -->
-                    <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.08)); border-radius: 8px; padding: 1.4em; display: flex; flex-direction: column; justify-content: space-between;">
+                    <div
+                        style="background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.08)); border-radius: 8px; padding: 1.4em; display: flex; flex-direction: column; justify-content: space-between;">
                         <div>
-                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8em;">
+                            <div
+                                style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8em;">
                                 <div style="display: flex; align-items: center; gap: 0.5em;">
-                                    <span class="quickstrm-badge" style="background: #00bcd4; color: white; font-weight: bold; padding: 0.3em 0.7em;">SONARR</span>
-                                    <span style="font-weight: 600; font-size: 1.05em; color: var(--text-color, #fff);">Series Recovery Feed</span>
+                                    <span class="quickstrm-badge"
+                                        style="background: #00bcd4; color: white; font-weight: bold; padding: 0.3em 0.7em;">SONARR</span>
+                                    <span
+                                        style="font-weight: 600; font-size: 1.05em; color: var(--text-color, #fff);">Series
+                                        Recovery Feed</span>
                                 </div>
                                 <div>
-                                    <span id="lblAutoHealSonarrCount" style="font-size: 1.4em; font-weight: bold; color: #00bcd4;">0</span>
-                                    <span style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-left: 2px;">queued</span>
+                                    <span id="lblAutoHealSonarrCount"
+                                        style="font-size: 1.4em; font-weight: bold; color: #00bcd4;">0</span>
+                                    <span
+                                        style="font-size: 0.8em; color: var(--text-muted-color, #888); margin-left: 2px;">queued</span>
                                 </div>
                             </div>
                             <div style="font-size: 0.84em; color: var(--text-muted-color, #aaa); margin-bottom: 1em;">
@@ -623,41 +720,56 @@
                             <div class="inputContainer" style="margin-bottom: 0.8em;">
                                 <label class="inputLabel" for="txtSonarrFeedUrl">Sonarr List URL</label>
                                 <div style="display: flex; gap: 6px; align-items: center;">
-                                    <input is="emby-input" type="text" id="txtSonarrFeedUrl" readonly class="emby-input" style="flex: 1; font-family: monospace; font-size: 0.85em; background: rgba(0,0,0,0.4);" />
-                                    <button is="emby-button" type="button" id="btnCopySonarrUrl" class="raised emby-button" style="margin: 0; padding: 0.5em 0.85em; white-space: nowrap;">
-                                        <span class="material-icons" style="font-size: 15px; margin-right: 4px;">content_copy</span>
+                                    <input is="emby-input" type="text" id="txtSonarrFeedUrl" readonly class="emby-input"
+                                        style="flex: 1; font-family: monospace; font-size: 0.85em; background: rgba(0,0,0,0.4);" />
+                                    <button is="emby-button" type="button" id="btnCopySonarrUrl"
+                                        class="raised emby-button"
+                                        style="margin: 0; padding: 0.5em 0.85em; white-space: nowrap;">
+                                        <span class="material-icons"
+                                            style="font-size: 15px; margin-right: 4px;">content_copy</span>
                                         <span>Copy</span>
                                     </button>
                                 </div>
                             </div>
                         </div>
-                        <div style="background: rgba(0, 188, 212, 0.08); border-left: 3px solid #00bcd4; border-radius: 4px; padding: 0.6em 0.8em; font-size: 0.8em; color: #b2ebf2; margin-top: 0.8em; line-height: 1.4;">
-                            <strong>Sonarr Setup:</strong> Settings → Import Lists → Add (+) → Custom List → Paste URL above → Monitor: Missing
+                        <div
+                            style="background: rgba(0, 188, 212, 0.08); border-left: 3px solid #00bcd4; border-radius: 4px; padding: 0.6em 0.8em; font-size: 0.8em; color: #b2ebf2; margin-top: 0.8em; line-height: 1.4;">
+                            <strong>Sonarr Setup:</strong> Settings → Import Lists → Add (+) → Custom List → Paste URL
+                            above → Monitor: Missing
                         </div>
                     </div>
                 </div>
 
                 <!-- Active Recovery Queue Table -->
-                <div class="paperList" style="padding: 1.4em; margin-bottom: 1.8em; border-radius: 8px; background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.08));">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1em;">
-                        <div style="font-weight: 600; font-size: 1.05em; display: flex; align-items: center; gap: 0.5em; color: var(--text-color, #fff);">
-                            <span class="material-icons" style="font-size: 1.1em; color: var(--theme-primary-color, #00a4dc);">playlist_play</span>
+                <div class="paperList"
+                    style="padding: 1.4em; margin-bottom: 1.8em; border-radius: 8px; background: rgba(0,0,0,0.2); border: 1px solid var(--line-color, rgba(255,255,255,0.08));">
+                    <div
+                        style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1em;">
+                        <div
+                            style="font-weight: 600; font-size: 1.05em; display: flex; align-items: center; gap: 0.5em; color: var(--text-color, #fff);">
+                            <span class="material-icons"
+                                style="font-size: 1.1em; color: var(--theme-primary-color, #00a4dc);">playlist_play</span>
                             <span>Active Recovery Queue</span>
                         </div>
-                        <div id="lblRecoveryQueueCount" class="quickstrm-badge" style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4);">
+                        <div id="lblRecoveryQueueCount" class="quickstrm-badge"
+                            style="background: rgba(0, 164, 220, 0.15); color: #00a4dc; border: 1px solid rgba(0, 164, 220, 0.4);">
                             0 items
                         </div>
                     </div>
 
-                    <div id="emptyAutoHealMessage" style="padding: 2em; text-align: center; color: var(--text-muted-color, #888); font-size: 0.9em;">
-                        <span class="material-icons" style="font-size: 2em; color: #81c784; display: block; margin-bottom: 0.3em;">check_circle_outline</span>
+                    <div id="emptyAutoHealMessage"
+                        style="padding: 2em; text-align: center; color: var(--text-muted-color, #888); font-size: 0.9em;">
+                        <span class="material-icons"
+                            style="font-size: 2em; color: #81c784; display: block; margin-bottom: 0.3em;">check_circle_outline</span>
                         All media healthy — 0 items awaiting replacement
                     </div>
 
                     <div id="tableAutoHealContainer" style="display: none; overflow-x: auto;">
-                        <table id="tblAutoHealItems" style="width: 100%; border-collapse: collapse; font-size: 0.88em; text-align: left;">
+                        <table id="tblAutoHealItems"
+                            style="width: 100%; border-collapse: collapse; font-size: 0.88em; text-align: left;">
                             <thead>
-                                <tr style="border-bottom: 1px solid var(--line-color, rgba(255,255,255,0.12)); color: var(--text-muted-color, #aaa);">
+                                <tr
+                                    style="border-bottom: 1px solid var(--line-color, rgba(255,255,255,0.12)); color: var(--text-muted-color, #aaa);">
                                     <th style="padding: 0.6em 0.8em;">Title</th>
                                     <th style="padding: 0.6em 0.8em; width: 100px;">Type</th>
                                     <th style="padding: 0.6em 0.8em; width: 130px;">Provider ID</th>
@@ -671,14 +783,19 @@
                 </div>
 
                 <!-- Self-Cleaning Mechanics Callout -->
-                <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--line-color, rgba(255,255,255,0.06)); border-radius: 6px; padding: 1em 1.2em; font-size: 0.85em; color: var(--text-muted-color, #999); line-height: 1.5;">
-                    <div style="font-weight: 600; color: var(--text-color, #fff); margin-bottom: 0.4em; display: flex; align-items: center; gap: 0.4em;">
+                <div
+                    style="background: rgba(255,255,255,0.03); border: 1px solid var(--line-color, rgba(255,255,255,0.06)); border-radius: 6px; padding: 1em 1.2em; font-size: 0.85em; color: var(--text-muted-color, #999); line-height: 1.5;">
+                    <div
+                        style="font-weight: 600; color: var(--text-color, #fff); margin-bottom: 0.4em; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="font-size: 16px; color: #4caf50;">verified</span>
                         <span>Zero-Maintenance Architecture</span>
                     </div>
-                    <div>• <strong>No Inbound Webhooks:</strong> Eliminates API key storage, base URL configuration, and Docker container loopback conflicts.</div>
-                    <div>• <strong>Real-Time Pruning:</strong> When an added or updated item arrives in Jellyfin, its ID is instantly pruned from the feed.</div>
-                    <div>• <strong>7-Day Automatic Expiration:</strong> Impossible-to-find requests are evicted after 7 days, preventing list bloat.</div>
+                    <div>• <strong>No Inbound Webhooks:</strong> Eliminates API key storage, base URL configuration, and
+                        Docker container loopback conflicts.</div>
+                    <div>• <strong>Real-Time Pruning:</strong> When an added or updated item arrives in Jellyfin, its ID
+                        is instantly pruned from the feed.</div>
+                    <div>• <strong>7-Day Automatic Expiration:</strong> Impossible-to-find requests are evicted after 7
+                        days, preventing list bloat.</div>
                 </div>
             </div>
         </div>
@@ -688,19 +805,23 @@
             <!-- Probing & Mount Protection Settings Form -->
             <form class="quickStrmConfigurationForm">
                 <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-                    <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1.2em; display: flex; align-items: center; gap: 0.4em;">
+                    <h3 class="sectionTitle"
+                        style="margin-top: 0; margin-bottom: 1.2em; display: flex; align-items: center; gap: 0.4em;">
                         <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">shield</span>
                         Probing &amp; Mount Protection
                     </h3>
 
                     <!-- Toggle Switch 1: Enable 3:00 AM Proactive Sweeper & Auto-Probe -->
-                    <div class="qs-switch-row" style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
+                    <div class="qs-switch-row"
+                        style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
                         <div style="flex: 1; padding-right: 1.5em;">
-                            <div style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
+                            <div
+                                style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
                                 <span>Enable 3:00 AM Proactive Sweeper</span>
                                 <span id="badgeSavedSweeper" class="qs-saved-badge">Saved</span>
                             </div>
-                            <div class="fieldDescription" style="margin-top: 0.3em;">Automatically probes new .strm additions upon import and executes nightly deep health sweeps.</div>
+                            <div class="fieldDescription" style="margin-top: 0.3em;">Automatically probes new .strm
+                                additions upon import and executes nightly deep health sweeps.</div>
                         </div>
                         <label class="qs-switch">
                             <input type="checkbox" id="chkEnableSweeper" />
@@ -709,13 +830,16 @@
                     </div>
 
                     <!-- Toggle Switch 2: Enable 404 Auto-Heal -->
-                    <div class="qs-switch-row" style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
+                    <div class="qs-switch-row"
+                        style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
                         <div style="flex: 1; padding-right: 1.5em;">
-                            <div style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
+                            <div
+                                style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
                                 <span>Enable 404 Auto-Heal</span>
                                 <span id="badgeSavedAutoHeal" class="qs-saved-badge">Saved</span>
                             </div>
-                            <div class="fieldDescription" style="margin-top: 0.3em;">Deletes dead .strm files on deterministic HTTP 404 and publishes missing IDs to the self-cleaning *arr feeds.</div>
+                            <div class="fieldDescription" style="margin-top: 0.3em;">Deletes dead .strm files on
+                                deterministic HTTP 404 and publishes missing IDs to the self-cleaning *arr feeds.</div>
                         </div>
                         <label class="qs-switch">
                             <input type="checkbox" id="chkEnableAutoHeal" />
@@ -724,13 +848,16 @@
                     </div>
 
                     <!-- Toggle Switch 3: Next-Episode Pre-Warming -->
-                    <div class="qs-switch-row" style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
+                    <div class="qs-switch-row"
+                        style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
                         <div style="flex: 1; padding-right: 1.5em;">
-                            <div style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
+                            <div
+                                style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
                                 <span>Enable Next-Episode Pre-Warming</span>
                                 <span id="badgeSavedNextEp" class="qs-saved-badge">Saved</span>
                             </div>
-                            <div class="fieldDescription" style="margin-top: 0.3em;">Pre-warms and probes upcoming episodes immediately when playback begins.</div>
+                            <div class="fieldDescription" style="margin-top: 0.3em;">Pre-warms and probes upcoming
+                                episodes immediately when playback begins.</div>
                         </div>
                         <label class="qs-switch">
                             <input type="checkbox" id="chkEnableNextEpisodePreWarm" />
@@ -739,13 +866,16 @@
                     </div>
 
                     <!-- Toggle Switch 4: Synthesize Virtual Chapters -->
-                    <div class="qs-switch-row" style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
+                    <div class="qs-switch-row"
+                        style="display: flex; align-items: center; justify-content: space-between; padding: 0.9em 0; border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));">
                         <div style="flex: 1; padding-right: 1.5em;">
-                            <div style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
+                            <div
+                                style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
                                 <span>Synthesize 5-Minute Virtual Chapters</span>
                                 <span id="badgeSavedChapters" class="qs-saved-badge">Saved</span>
                             </div>
-                            <div class="fieldDescription" style="margin-top: 0.3em;">Generates virtual chapter markers every 5 minutes once runtime is resolved.</div>
+                            <div class="fieldDescription" style="margin-top: 0.3em;">Generates virtual chapter markers
+                                every 5 minutes once runtime is resolved.</div>
                         </div>
                         <label class="qs-switch">
                             <input type="checkbox" id="chkSynthesizeVirtualChapters" />
@@ -754,35 +884,43 @@
                     </div>
 
                     <div class="inputContainer" style="margin-top: 1.2em; margin-bottom: 0.5em;">
-                        <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input" label="Mount Marker File Name (Optional)" />
-                        <div class="fieldDescription">A verification file that must exist on your cloud mount (e.g. .mount_ok). Traverses up to 5 parent folders above each .strm. If missing, failures are treated as a dropped mount and deletion is suppressed.</div>
+                        <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input"
+                            label="Mount Marker File Name (Optional)" />
+                        <div class="fieldDescription">A verification file that must exist on your cloud mount (e.g.
+                            .mount_ok). Traverses up to 5 parent folders above each .strm. If missing, failures are
+                            treated as a dropped mount and deletion is suppressed.</div>
                     </div>
 
                     <!-- Hidden alias to preserve backward compatibility if needed -->
                     <input type="hidden" id="txtJellyfinBaseUrl" />
                     <!-- Hidden button for programmatic submit compatibility -->
-                    <button is="emby-button" type="submit" id="btnSaveMaintenanceSettings" style="display: none;"></button>
+                    <button is="emby-button" type="submit" id="btnSaveMaintenanceSettings"
+                        style="display: none;"></button>
                 </div>
             </form>
 
             <!-- STRM Maintenance Tools -->
             <div class="paperList" style="padding: 1.5em; margin-bottom: 2em; border-radius: 8px;">
-                <h3 class="sectionTitle" style="margin-top: 0; margin-bottom: 1em; display: flex; align-items: center; gap: 0.4em;">
+                <h3 class="sectionTitle"
+                    style="margin-top: 0; margin-bottom: 1em; display: flex; align-items: center; gap: 0.4em;">
                     <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">build</span>
                     Bulk URL / Path Rewriter
                 </h3>
                 <div style="font-size: 0.88em; color: var(--text-muted-color, #888); margin-bottom: 1.2em;">
-                    Scan and update target URLs inside all .strm files across your entire Jellyfin library (e.g. after domain migrations, CDN switches, or mount scheme changes).
+                    Scan and update target URLs inside all .strm files across your entire Jellyfin library (e.g. after
+                    domain migrations, CDN switches, or mount scheme changes).
                 </div>
 
                 <div class="quickstrm-form-row">
                     <div class="inputContainer">
                         <label class="inputLabel" for="txtRewriteOldPrefix">Old Prefix</label>
-                        <input is="emby-input" type="text" id="txtRewriteOldPrefix" class="emby-input" placeholder="e.g. https://old-cdn.com/" />
+                        <input is="emby-input" type="text" id="txtRewriteOldPrefix" class="emby-input"
+                            placeholder="e.g. https://old-cdn.com/" />
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel" for="txtRewriteNewPrefix">New Prefix</label>
-                        <input is="emby-input" type="text" id="txtRewriteNewPrefix" class="emby-input" placeholder="e.g. https://new-cdn.com/" />
+                        <input is="emby-input" type="text" id="txtRewriteNewPrefix" class="emby-input"
+                            placeholder="e.g. https://new-cdn.com/" />
                     </div>
                 </div>
 
@@ -793,17 +931,21 @@
                     </label>
                 </div>
 
-                <button is="emby-button" type="button" id="btnRewriteUrls" class="raised button-submit emby-button btnRunRewrite" style="margin: 0;">
+                <button is="emby-button" type="button" id="btnRewriteUrls"
+                    class="raised button-submit emby-button btnRunRewrite" style="margin: 0;">
                     <span>Execute URL Rewrite</span>
                 </button>
 
-                <div id="rewriteResults" style="display: none; margin-top: 1.2em; padding: 1.2em; border-radius: 6px; font-family: monospace; font-size: 0.85em; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line-color, rgba(255, 255, 255, 0.1));"></div>
+                <div id="rewriteResults"
+                    style="display: none; margin-top: 1.2em; padding: 1.2em; border-radius: 6px; font-family: monospace; font-size: 0.85em; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line-color, rgba(255, 255, 255, 0.1));">
+                </div>
             </div>
         </div>
 
     </div>
     <!-- Inline Self-Healing Bootstrapper: executes if Jellyfin's AMD loader hasn't bound the controller -->
-    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" style="display:none;" onload="
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" style="display:none;"
+        onload="
         var page = this.closest('#QuickStrmConfigPage');
         if (page) {
             setTimeout(function () {

@@ -1508,9 +1508,15 @@ public sealed class ProbeService : IHostedService, IDisposable
             {
                 if (_failedPersistCache.TryRemove(kvp.Key, out _))
                 {
+                    _itemRetryCounts.TryRemove(kvp.Key, out _);
                     sweptFailed++;
                 }
             }
+        }
+
+        if (_inMemoryStreams.Count > 1000)
+        {
+            _inMemoryStreams.Clear();
         }
 
         if (sweptUrls > 0 || sweptFailed > 0)
@@ -1575,6 +1581,12 @@ public sealed class ProbeService : IHostedService, IDisposable
             catch
             {
             }
+
+            if (!string.IsNullOrEmpty(item?.Container))
+            {
+                source.Container = item.Container;
+            }
+
             return null;
         }
 
@@ -1586,6 +1598,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             {
                 if (_inflightProbes.TryGetValue(itemId, out var racedTask))
                 {
+                    _logger.LogInformation("QuickSTRM: Awaiting existing in-flight probe for inline item {Id}", itemId);
                     try
                     {
                         await racedTask.ConfigureAwait(false);
@@ -1593,6 +1606,12 @@ public sealed class ProbeService : IHostedService, IDisposable
                     catch
                     {
                     }
+
+                    if (!string.IsNullOrEmpty(item?.Container))
+                    {
+                        source.Container = item.Container;
+                    }
+
                     return null;
                 }
             }
@@ -1602,7 +1621,6 @@ public sealed class ProbeService : IHostedService, IDisposable
         try
         {
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            using var linkedBudget = CancellationTokenSource.CreateLinkedTokenSource(budgetToken, ct, timeoutCts.Token);
             item ??= (itemId != Guid.Empty ? _libraryManager.GetItemById(itemId) : null)
                      ?? new ProbeTargetItem { Id = itemId != Guid.Empty ? itemId : Guid.NewGuid(), Path = source.Path };
             if (string.IsNullOrEmpty(item.Path))
@@ -1610,15 +1628,9 @@ public sealed class ProbeService : IHostedService, IDisposable
                 item.Path = source.Path;
             }
 
-            try
-            {
-                // CRITICAL: Inline playback probe bypasses _probeThrottle completely and uses a fast 8-second timeout
-                mediaInfo = await ExecuteCoreProbeAsync(item, TimeSpan.FromSeconds(8), linkedBudget.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return null;
-            }
+            // CRITICAL: Inline playback probe bypasses _probeThrottle and _probeGate completely and uses a fast 8-second timeout
+            // Decoupled from caller token to ensure SQLite stream persistence and in-memory caching completes even if client drops socket
+            mediaInfo = await ExecuteCoreProbeAsync(item, TimeSpan.FromSeconds(8), timeoutCts.Token, bypassProbeGate: true).ConfigureAwait(false);
 
             if (mediaInfo is not null && !string.IsNullOrEmpty(item.Container))
             {
@@ -1626,6 +1638,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
 
             return mediaInfo;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
         }
         finally
         {
@@ -2062,7 +2078,8 @@ public sealed class ProbeService : IHostedService, IDisposable
     internal async Task<MediaInfo?> ExecuteCoreProbeAsync(
         BaseItem item,
         TimeSpan ffprobeTimeout,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool bypassProbeGate = false)
     {
         string? targetUrl;
         if (IsStrmFile(item.Path))
@@ -2173,13 +2190,16 @@ public sealed class ProbeService : IHostedService, IDisposable
                 }
             }
 
-            try
+            if (!bypassProbeGate)
             {
-                await _probeGate.WaitAsync(ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                return null;
+                try
+                {
+                    await _probeGate.WaitAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    return null;
+                }
             }
 
             try
@@ -2193,7 +2213,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     Path = targetUrl,
                     Protocol = protocol,
                     Type = MediaSourceType.Default,
-                    Container = Path.GetExtension(targetUrl).TrimStart('.')
+                    Container = MediaSourceInterceptor.NormalizeContainer(item.Container, targetUrl)
                 };
 
                 MediaInfo? mediaInfo;
@@ -2290,7 +2310,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
             finally
             {
-                ReleaseQuietly(_probeGate);
+                if (!bypassProbeGate)
+                {
+                    ReleaseQuietly(_probeGate);
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -2353,7 +2376,8 @@ public sealed class ProbeService : IHostedService, IDisposable
             _logger.LogInformation("QuickSTRM: In-flight probe coalesced for item {Name} ({Id})", item.Name, item.Id);
             try
             {
-                return await existingTask.ConfigureAwait(false);
+                var existingResult = await existingTask.ConfigureAwait(false);
+                return existingResult && HasStreamInfo(item);
             }
             catch
             {
@@ -2371,7 +2395,8 @@ public sealed class ProbeService : IHostedService, IDisposable
                 {
                     try
                     {
-                        return await racedTask.ConfigureAwait(false);
+                        var racedResult = await racedTask.ConfigureAwait(false);
+                        return racedResult && HasStreamInfo(item);
                     }
                     catch
                     {
@@ -2393,10 +2418,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         finally
         {
             onSlotReleased?.Invoke();
-            if (item.Id != Guid.Empty)
+            if (item.Id != Guid.Empty && probeTcs is not null)
             {
                 _inflightProbes.TryRemove(item.Id, out _);
-                probeTcs?.TrySetResult(probeOk);
+                probeTcs.TrySetResult(probeOk);
             }
         }
     }

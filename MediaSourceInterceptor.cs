@@ -101,10 +101,17 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 }
             }
 
-            // Re-evaluate item streams after inline probe
-            itemStreams = GetItemStreams(item);
+            // Re-evaluate item streams after inline probe: prefer direct probe result if valid, else check database/memory cache
+            if (probeResult?.MediaStreams is not null && HasValidVideoStream(probeResult.MediaStreams))
+            {
+                itemStreams = probeResult.MediaStreams;
+            }
+            else
+            {
+                itemStreams = GetItemStreams(item);
+            }
 
-            if (probeResult is null || !HasValidVideoStream(itemStreams))
+            if (!HasValidVideoStream(itemStreams))
             {
                 _logger.LogWarning(
                     "QuickSTRM: On-demand probe failed or streams remain empty/invalid for {Name}; returning Enumerable.Empty to prevent transcoder crash",
@@ -330,6 +337,27 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 {
                     var uriPath = Uri.TryCreate(path, UriKind.Absolute, out var uri) ? uri.AbsolutePath : path;
                     var ext = System.IO.Path.GetExtension(uriPath).TrimStart('.').Trim();
+                    if (string.IsNullOrEmpty(ext) && uri is not null && !string.IsNullOrEmpty(uri.Query))
+                    {
+                        var query = uri.Query.AsSpan();
+                        var extIdx = query.IndexOf("extension=".AsSpan(), StringComparison.OrdinalIgnoreCase);
+                        if (extIdx >= 0)
+                        {
+                            var slice = query.Slice(extIdx + 10);
+                            var ampIdx = slice.IndexOf('&');
+                            if (ampIdx >= 0)
+                            {
+                                slice = slice.Slice(0, ampIdx);
+                            }
+
+                            slice = slice.TrimStart('.');
+                            if (!slice.IsEmpty)
+                            {
+                                ext = slice.ToString();
+                            }
+                        }
+                    }
+
                     if (!string.IsNullOrEmpty(ext) && !ext.Equals("strm", StringComparison.OrdinalIgnoreCase))
                     {
                         input = ext;

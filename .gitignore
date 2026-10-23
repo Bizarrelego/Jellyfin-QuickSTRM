@@ -22,3 +22,6 @@ RELEASE_NOTES.md
 
 # Local test suite
 QuickSTRM.Tests/
+validate_quickstrm.ps1
+scripts/validate_quickstrm.ps1
+scripts/validate_quickstrm.sh
