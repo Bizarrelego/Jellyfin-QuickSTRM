@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.7] - 2026-10-23
+
+### 🛡️ Transcoder Out-Of-Bounds Elimination & Strict Interceptor Guards
+
+Critical bugfix release resolving the `ArgumentOutOfRangeException` crash in Jellyfin's HLS transcoder and playlist generator by enforcing strict media stream evaluation in `MediaSourceInterceptor`, triggering on-demand inline probing for unprobed items, guaranteeing clean fallback to native `.strm` handling when video codecs are absent, and securing all default audio/subtitle index pointers against out-of-bounds access.
+
+### Added
+- **Strict Interceptor Guard & On-Demand Inline Probing (`MediaSourceInterceptor.cs`)**:
+  - In `GetPlaybackMediaSources`, evaluates `item.MediaStreams` / `GetItemStreams` for valid video codecs (`HasValidVideoStream`).
+  - If streams are null, empty, or missing a valid `MediaStreamType.Video` codec, triggers an on-demand inline probe via `_probeService.ProbeOneInlineAsync(item, ...)`.
+  - If the inline probe fails, times out, or streams remain empty, returns `Enumerable.Empty<MediaSourceInfo>()` so Jellyfin safely aborts or utilizes native `.strm` fallback instead of crashing the transcoder.
+- **Secure Default Index Pointer Sanitization (`MediaSourceInterceptor.SanitizeDefaultStreamIndices`)**:
+  - Ensures sequential 0-based indexing (`stream.Index = i`) on all `MediaStream` entries.
+  - Verifies `DefaultAudioStreamIndex` and `DefaultSubtitleStreamIndex` actually point to valid in-bounds elements matching the respective stream type (`MediaStreamType.Audio` / `MediaStreamType.Subtitle`).
+  - Automatically recovers out-of-bounds or misdirected indices by selecting the first valid stream of that type, or setting `null` when none exist, preventing `ArgumentOutOfRangeException` during HLS playlist generation and FFmpeg transcoding.
+- **Automated Interceptor & Transcoder Resilience Tests (`MediaSourceInterceptorTests.cs`)**:
+  - Validates `SanitizeDefaultStreamIndices` recovers out-of-bounds audio indices, sets subtitle index to null when subtitles are missing, and re-indexes non-sequential stream collections.
+  - Tests `HasValidVideoStream` codec validation and confirms unprobed items return empty source lists upon probe failure.
+
+### Changed
+- **Guaranteed Index Sanitization Across All Retrieval Points (`MediaSourceInterceptor.cs`)**:
+  - Applies `SanitizeDefaultStreamIndices` across `NormalizeMediaSourceInfo`, `ApplyProbeResult`, `GetPlaybackMediaSources`, `GetStaticMediaSources`, and `GetMediaSource`.
+  - Re-sanitizes default stream indices after `_inner.SetDefaultAudioAndSubtitleStreamIndices(item, source, user)` user language preference selection.
+
+---
 ## [4.2.6] - 2026-10-22
 
 ### 🎬 Playback Contention Elimination & Stream Pipeline Integrity

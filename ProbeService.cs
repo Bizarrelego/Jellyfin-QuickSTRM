@@ -1547,7 +1547,18 @@ public sealed class ProbeService : IHostedService, IDisposable
     {
     }
 
-    internal async Task<MediaInfo?> ProbeOneInlineAsync(
+    public Task<MediaInfo?> ProbeOneInlineAsync(BaseItem item, CancellationToken ct = default)
+    {
+        var source = new MediaSourceInfo
+        {
+            Id = item.Id.ToString("N"),
+            Path = item.Path,
+            Protocol = item.Path?.StartsWith("http", StringComparison.OrdinalIgnoreCase) == true ? MediaProtocol.Http : MediaProtocol.File
+        };
+        return ProbeOneInlineAsync(source, CancellationToken.None, ct, item);
+    }
+
+    public async Task<MediaInfo?> ProbeOneInlineAsync(
         MediaSourceInfo source,
         CancellationToken budgetToken,
         CancellationToken ct,
