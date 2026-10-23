@@ -517,46 +517,57 @@ public sealed class ProbeService : IHostedService, IDisposable
             var itemName = item.Name ?? item.Path ?? "Unknown";
             _activeProbeNames[item.Id] = itemName;
 
-            _ = Task.Run(async () =>
+            try
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    var mediaInfo = await ExecuteCoreProbeAsync(
-                        item,
-                        BackgroundProbeTimeout,
-                        ct).ConfigureAwait(false);
+                    try
+                    {
+                        var mediaInfo = await ExecuteCoreProbeAsync(
+                            item,
+                            BackgroundProbeTimeout,
+                            ct).ConfigureAwait(false);
 
-                    if (isTrial)
-                    {
-                        ResolveTrial(mediaInfo is not null && HasStreamInfo(item));
+                        if (isTrial)
+                        {
+                            ResolveTrial(mediaInfo is not null && HasStreamInfo(item));
+                        }
                     }
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "QuickSTRM: Background persist failed for {Name}", item.Name);
-                    if (isTrial)
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
                     {
-                        ResolveTrial(false);
                     }
-                }
-                finally
-                {
-                    _activeProbeNames.TryRemove(item.Id, out _);
-                    _pendingPersist.TryRemove(item.Id, out _);
-                    Interlocked.Decrement(ref _activeProbes);
-                    _probeThrottle.Release();
-                    if (Volatile.Read(ref _activeProbes) == 0 &&
-                        _highPriorityChannel.Reader.Count == 0 &&
-                        _lowPriorityChannel.Reader.Count == 0 &&
-                        Volatile.Read(ref _isScanningLibrary) == 0)
+                    catch (Exception ex)
                     {
-                        Interlocked.Exchange(ref _isBatchRunning, 0);
+                        _logger.LogWarning(ex, "QuickSTRM: Background persist failed for {Name}", item.Name);
+                        if (isTrial)
+                        {
+                            ResolveTrial(false);
+                        }
                     }
-                }
-            });
+                    finally
+                    {
+                        _activeProbeNames.TryRemove(item.Id, out _);
+                        _pendingPersist.TryRemove(item.Id, out _);
+                        Interlocked.Decrement(ref _activeProbes);
+                        _probeThrottle.Release();
+                        if (Volatile.Read(ref _activeProbes) == 0 &&
+                            _highPriorityChannel.Reader.Count == 0 &&
+                            _lowPriorityChannel.Reader.Count == 0 &&
+                            Volatile.Read(ref _isScanningLibrary) == 0)
+                        {
+                            Interlocked.Exchange(ref _isBatchRunning, 0);
+                        }
+                    }
+                }, ct);
+            }
+            catch (Exception)
+            {
+                _activeProbeNames.TryRemove(item.Id, out _);
+                _pendingPersist.TryRemove(item.Id, out _);
+                Interlocked.Decrement(ref _activeProbes);
+                _probeThrottle.Release();
+                throw;
+            }
         }
     }
 

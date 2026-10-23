@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.5] - 2026-10-22
+
+### 🚀 Decoupled Probe Initiation & Deadlock-Free Semaphore Management
+
+Performance and stability release eliminating synchronous Kestrel deadlocks during pre-probe initiation by completely decoupling HTTP request threads from library scans, alongside guaranteed asynchronous semaphore throttling in the background consumer loop.
+
+### Added
+- **Instant Decoupled Pre-Probe Endpoint (`QuickStrmController.cs`)**:
+  - Decoupled `POST /QuickStrm/Probe/Start` and `POST /QuickStrm/Probe` from `QueueLibraryScanAsync` using `Task.Run` background dispatch.
+  - Returns `200 OK` (`{ Success = true, Message = "Scan initiated" }`) immediately in `< 1ms`, completely preventing Kestrel thread starvation and client UI freezing during long SQLite metadata scans.
+
+### Changed
+- **Hardened Semaphore Throttling Lifecycle (`ProbeService.cs`)**:
+  - Enforced strictly asynchronous `await _probeThrottle.WaitAsync(ct).ConfigureAwait(false)` in the consumer loop with guaranteed `_probeThrottle.Release()` in background task `finally` blocks.
+  - Added dispatch-level exception guards ensuring semaphore slots are immediately released if background task scheduling encounters unexpected exceptions.
+
+---
 ## [4.2.4] - 2026-10-22
 
 ### ⚡ Non-Blocking Concurrent Queue Processing & Offloaded FFprobe Execution

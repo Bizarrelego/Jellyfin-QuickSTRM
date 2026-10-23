@@ -263,12 +263,12 @@ public class QuickStrmController : ControllerBase
 
     /// <summary>
     /// Starts a manual background probe scan across the library.
-    /// Returns 202 Accepted immediately without blocking the HTTP request thread.
+    /// Returns 200 OK immediately without blocking the HTTP request thread.
     /// </summary>
     [HttpPost("Probe")]
     [HttpPost("Probe/Start")]
     [Authorize(Policy = "RequiresElevation")]
-    public async Task<ActionResult> StartProbe([FromQuery] string? mode = null, [FromBody] ProbeRequestDto? body = null)
+    public ActionResult StartProbe([FromQuery] string? mode = null, [FromBody] ProbeRequestDto? body = null)
     {
         var rawMode = mode ?? body?.Mode;
         var probeMode = string.Equals(rawMode, "FullRefresh", StringComparison.OrdinalIgnoreCase) ||
@@ -282,15 +282,9 @@ public class QuickStrmController : ControllerBase
             return Conflict(new { Message = "A probe batch or whole-library scan is already running." });
         }
 
-        await _probeService.QueueLibraryScanAsync(probeMode).ConfigureAwait(false);
+        _ = Task.Run(() => _probeService.QueueLibraryScanAsync(probeMode));
 
-        return Accepted(new
-        {
-            Message = $"Probe queued in {probeMode} mode. Processing asynchronously.",
-            Mode = probeMode.ToString(),
-            State = "Running",
-            Enqueued = _probeService.TotalItems
-        });
+        return Ok(new { Success = true, Message = "Scan initiated" });
     }
 
     /// <summary>

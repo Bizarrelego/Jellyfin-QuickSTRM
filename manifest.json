@@ -8,6 +8,14 @@
     "category": "General",
     "versions": [
       {
+        "version": "4.2.5",
+        "changelog": "\ud83d\ude80 Decoupled Probe Initiation & Deadlock-Free Semaphore Management\nPerformance and stability release eliminating synchronous Kestrel deadlocks during pre-probe initiation by completely decoupling HTTP request threads from library scans, alongside guaranteed asynchronous semaphore throttling in the background consumer loop.\nAdded\n- **Instant Decoupled Pre-Probe Endpoint (`QuickStrmController.cs`)**:\n  - Decoupled `POST /QuickStrm/Probe/Start` and `POST /QuickStrm/Probe` from `QueueLibraryScanAsync` using `Task.Run` background dispatch.\n  - Returns `200 OK` (`{ Success = true, Message = \"Scan initiated\" }`) immediately in `< 1ms`, completely preventing Kestrel thread starvation and client UI freezing during long SQLite metadata scans.\nChanged\n- **Hardened Semaphore Throttling Lifecycle (`ProbeService.cs`)**:\n  - Enforced strictly asynchronous `await _probeThrottle.WaitAsync(ct).ConfigureAwait(false)` in the consumer loop with guaranteed `_probeThrottle.Release()` in background task `finally` blocks.\n  - Added dispatch-level exception guards ensuring semaphore slots are immediately released if background task scheduling encounters unexpected exceptions.",
+        "targetAbi": "12.2.0.0",
+        "sourceUrl": "https://github.com/Bizarrelego/Jellyfin-QuickSTRM/releases/download/v4.2.5/QuickSTRM.zip",
+        "checksum": "",
+        "timestamp": "2026-10-23T02:56:19Z"
+      },
+      {
         "version": "4.2.4",
         "changelog": "\u26a1 Non-Blocking Concurrent Queue Processing & Offloaded FFprobe Execution\nCritical responsiveness and concurrency release resolving synchronous thread-blocking that starved Kestrel HTTP threads during dead-link timeouts, while unblocking the background queue consumer loop to execute up to 4 probes concurrently via `Task.Run`.\nAdded\n- **Asynchronous Concurrent Queue Dispatch (`ProbeService.cs`)**:\n  - Refactored background consumer loop to dispatch probe executions onto worker threads via `Task.Run` after acquiring `_probeThrottle`.\n  - Enables the consumer loop to immediately dequeue subsequent items and run exactly 4 concurrent probes without waiting on 25-second dead-link timeouts.\n- **Offloaded FFmpeg Execution (`ProbeService.cs`)**:\n  - Wrapped `_mediaEncoder.GetMediaInfo` in `Task.Run` within `ExecuteCoreProbeAsync`.\n  - Forces synchronous process execution and socket I/O off Jellyfin's core thread pool, preventing UI and connected client freezes during slow Usenet or cloud mount responses.\nChanged\n- **Guaranteed Throttle Release Lifecycle (`ProbeService.cs`)**:\n  - Ensured `_probeThrottle.Release()`, active probe eviction, and batch state evaluations are strictly managed inside background task `finally` blocks.",
         "targetAbi": "12.2.0.0",
