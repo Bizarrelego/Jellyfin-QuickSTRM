@@ -1,6 +1,7 @@
 #nullable disable
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -30,6 +31,9 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     // avoids a DI cycle at startup (ProbeService -> ILibraryManager -> ... -> IMediaSourceManager) and keeps startup cheap on
     // a Core i3: the ProbeService is resolved only on the first first-play request instead of during container construction
     private readonly Func<ProbeService> _probeServiceFactory;
+    private static readonly ConcurrentDictionary<Guid, DateTime> _recentInlineProbeAttempts = new();
+
+    internal static void ClearRecentInlineProbeAttempts() => _recentInlineProbeAttempts.Clear();
 
     public MediaSourceInterceptor(
         IMediaSourceManager inner,
@@ -86,24 +90,24 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             }
         }
 
+        string targetUrl = null;
+        try
+        {
+            targetUrl = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+
+        var effectivePath = !string.IsNullOrWhiteSpace(targetUrl) ? targetUrl : item.Path;
+        var isHttp = effectivePath?.StartsWith("http://", StringComparison.OrdinalIgnoreCase) == true ||
+                     effectivePath?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) == true;
+
         if (sources.Count == 0)
         {
             _logger.LogInformation(
                 "QuickSTRM: Inner media source manager returned empty sources for {Name}; synthesizing fallback native source",
                 item.Name);
-
-            string targetUrl = null;
-            try
-            {
-                targetUrl = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
-            }
-            catch
-            {
-            }
-
-            var effectivePath = !string.IsNullOrWhiteSpace(targetUrl) ? targetUrl : item.Path;
-            var isHttp = effectivePath?.StartsWith("http://", StringComparison.OrdinalIgnoreCase) == true ||
-                         effectivePath?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) == true;
 
             var fallbackSource = new MediaSourceInfo
             {
@@ -117,14 +121,34 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 RequiresOpening = false,
                 SupportsDirectPlay = true,
                 SupportsDirectStream = true,
-                SupportsTranscoding = true
+                SupportsTranscoding = true,
+                IsRemote = isHttp,
+                ReadAtNativeFramerate = false,
+                RunTimeTicks = item.RunTimeTicks,
+                Bitrate = 15_000_000
             };
 
             sources.Add(fallbackSource);
         }
 
-        // 1. Strict Interceptor Guard: Evaluate item streams (or existing source streams) for valid video codec
-        var itemStreams = GetItemStreams(item);
+        // Check in-memory ProbeService cache FIRST!
+        var probeService = _probeServiceFactory?.Invoke();
+        CachedProbeResult cachedProbe = null;
+        if (probeService is not null && item.Id != Guid.Empty)
+        {
+            probeService.TryGetCachedProbeResult(item.Id, out cachedProbe);
+        }
+
+        IReadOnlyList<MediaStream> itemStreams = null;
+        if (cachedProbe is not null && HasValidVideoStream(cachedProbe.MediaStreams))
+        {
+            itemStreams = cachedProbe.MediaStreams;
+        }
+        else
+        {
+            itemStreams = GetItemStreams(item);
+        }
+
         if (!HasValidVideoStream(itemStreams))
         {
             var existingSourceStreams = sources.FirstOrDefault(s => s.MediaStreams != null && s.MediaStreams.Count > 0)?.MediaStreams;
@@ -136,39 +160,66 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         if (!HasValidVideoStream(itemStreams))
         {
-            _logger.LogInformation(
-                "QuickSTRM: Item {Name} has null/empty streams or missing valid video codec; triggering on-demand inline probe",
-                item.Name);
-
-            var probeService = _probeServiceFactory?.Invoke();
-            MediaInfo probeResult = null;
-            if (probeService is not null)
+            var now = DateTime.UtcNow;
+            var onCooldown = false;
+            if (item.Id != Guid.Empty && _recentInlineProbeAttempts.TryGetValue(item.Id, out var lastAttempt))
             {
-                try
+                var elapsed = now - lastAttempt;
+                if (elapsed < TimeSpan.FromSeconds(30))
                 {
-                    probeResult = await probeService.ProbeOneInlineAsync(item, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "QuickSTRM: On-demand inline probe failed for {Name}", item.Name);
+                    onCooldown = true;
+                    _logger.LogDebug(
+                        "QuickSTRM: Item {Name} probe cooldown active ({Elapsed:0.0}s < 30s); skipping redundant inline probe",
+                        item.Name,
+                        elapsed.TotalSeconds);
                 }
             }
 
-            // Re-evaluate item streams after inline probe: prefer direct probe result if valid, else check database/memory cache
-            if (probeResult?.MediaStreams is not null && HasValidVideoStream(probeResult.MediaStreams))
+            if (!onCooldown)
             {
-                itemStreams = probeResult.MediaStreams;
-            }
-            else
-            {
-                itemStreams = GetItemStreams(item);
-            }
+                if (item.Id != Guid.Empty)
+                {
+                    _recentInlineProbeAttempts[item.Id] = now;
+                }
 
-            if (!HasValidVideoStream(itemStreams))
-            {
-                _logger.LogWarning(
-                    "QuickSTRM: On-demand probe failed or streams remain unprobed for {Name}; continuing with sanitized native source",
+                _logger.LogInformation(
+                    "QuickSTRM: Item {Name} has null/empty streams or missing valid video codec; triggering on-demand inline probe",
                     item.Name);
+
+                MediaInfo probeResult = null;
+                if (probeService is not null)
+                {
+                    try
+                    {
+                        probeResult = await probeService.ProbeOneInlineAsync(item, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "QuickSTRM: On-demand inline probe failed for {Name}", item.Name);
+                    }
+                }
+
+                // Re-evaluate item streams after inline probe: prefer direct probe result if valid, else check database/memory cache
+                if (probeResult?.MediaStreams is not null && HasValidVideoStream(probeResult.MediaStreams))
+                {
+                    itemStreams = probeResult.MediaStreams;
+                }
+                else if (item.Id != Guid.Empty && probeService != null && probeService.TryGetCachedProbeResult(item.Id, out var newlyCached) && HasValidVideoStream(newlyCached.MediaStreams))
+                {
+                    itemStreams = newlyCached.MediaStreams;
+                    cachedProbe = newlyCached;
+                }
+                else
+                {
+                    itemStreams = GetItemStreams(item);
+                }
+
+                if (!HasValidVideoStream(itemStreams))
+                {
+                    _logger.LogWarning(
+                        "QuickSTRM: On-demand probe failed or streams remain unprobed for {Name}; continuing with sanitized native source",
+                        item.Name);
+                }
             }
         }
 
@@ -177,6 +228,39 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         foreach (var s in sources)
         {
+            s.Id = item.Id.ToString("N");
+            if (!string.IsNullOrWhiteSpace(targetUrl))
+            {
+                s.Path = targetUrl;
+                s.Protocol = (targetUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || targetUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) ? MediaProtocol.Http : MediaProtocol.File;
+                s.IsRemote = s.Protocol == MediaProtocol.Http;
+            }
+
+            if (cachedProbe?.RunTimeTicks.HasValue == true && cachedProbe.RunTimeTicks.Value > 0)
+            {
+                s.RunTimeTicks = cachedProbe.RunTimeTicks.Value;
+            }
+            else if (item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0)
+            {
+                s.RunTimeTicks = item.RunTimeTicks.Value;
+            }
+
+            if (cachedProbe?.Bitrate.HasValue == true && cachedProbe.Bitrate.Value > 0)
+            {
+                s.Bitrate = (int)Math.Min(cachedProbe.Bitrate.Value, int.MaxValue);
+            }
+
+            if (cachedProbe?.Size.HasValue == true && cachedProbe.Size.Value > 0)
+            {
+                s.Size = cachedProbe.Size.Value;
+            }
+            else if (item.Size.HasValue && item.Size.Value > 0)
+            {
+                s.Size = item.Size.Value;
+            }
+
+            s.Container = NormalizeContainer(cachedProbe?.Container ?? s.Container ?? item.Container, s.Path);
+
             NormalizeMediaSourceInfo(s);
             if (user is not null)
             {
@@ -366,46 +450,89 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         return resolved;
     }
 
+    private static string ExtractExtensionFromPathOrUrl(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            if (Uri.TryCreate(path, UriKind.Absolute, out var uri))
+            {
+                if (!string.IsNullOrEmpty(uri.Query))
+                {
+                    var query = uri.Query.AsSpan();
+                    string[] paramNames = ["extension=", "format=", "ext="];
+                    foreach (var param in paramNames)
+                    {
+                        var idx = 0;
+                        while (idx < query.Length)
+                        {
+                            var matchIdx = query.Slice(idx).IndexOf(param.AsSpan(), StringComparison.OrdinalIgnoreCase);
+                            if (matchIdx < 0)
+                            {
+                                break;
+                            }
+
+                            var absMatchIdx = idx + matchIdx;
+                            if (absMatchIdx == 0 || query[absMatchIdx - 1] == '?' || query[absMatchIdx - 1] == '&')
+                            {
+                                var slice = query.Slice(absMatchIdx + param.Length);
+                                var ampIdx = slice.IndexOf('&');
+                                if (ampIdx >= 0)
+                                {
+                                    slice = slice.Slice(0, ampIdx);
+                                }
+
+                                slice = slice.TrimStart('.');
+                                if (!slice.IsEmpty)
+                                {
+                                    var ext = slice.ToString();
+                                    if (!ext.Equals("strm", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        return ext;
+                                    }
+                                }
+                            }
+
+                            idx = absMatchIdx + param.Length;
+                        }
+                    }
+                }
+
+                var pathExt = System.IO.Path.GetExtension(uri.AbsolutePath).TrimStart('.').Trim();
+                if (!string.IsNullOrEmpty(pathExt) && !pathExt.Equals("strm", StringComparison.OrdinalIgnoreCase))
+                {
+                    return pathExt;
+                }
+            }
+            else
+            {
+                var localExt = System.IO.Path.GetExtension(path).TrimStart('.').Trim();
+                if (!string.IsNullOrEmpty(localExt) && !localExt.Equals("strm", StringComparison.OrdinalIgnoreCase))
+                {
+                    return localExt;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
     public static string NormalizeContainer(string container, string path = null)
     {
         var input = container?.Trim();
         if (string.Equals(input, "strm", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(input))
         {
-            if (!string.IsNullOrEmpty(path))
+            var extracted = ExtractExtensionFromPathOrUrl(path);
+            if (!string.IsNullOrEmpty(extracted))
             {
-                try
-                {
-                    var uriPath = Uri.TryCreate(path, UriKind.Absolute, out var uri) ? uri.AbsolutePath : path;
-                    var ext = System.IO.Path.GetExtension(uriPath).TrimStart('.').Trim();
-                    if (string.IsNullOrEmpty(ext) && uri is not null && !string.IsNullOrEmpty(uri.Query))
-                    {
-                        var query = uri.Query.AsSpan();
-                        var extIdx = query.IndexOf("extension=".AsSpan(), StringComparison.OrdinalIgnoreCase);
-                        if (extIdx >= 0)
-                        {
-                            var slice = query.Slice(extIdx + 10);
-                            var ampIdx = slice.IndexOf('&');
-                            if (ampIdx >= 0)
-                            {
-                                slice = slice.Slice(0, ampIdx);
-                            }
-
-                            slice = slice.TrimStart('.');
-                            if (!slice.IsEmpty)
-                            {
-                                ext = slice.ToString();
-                            }
-                        }
-                    }
-
-                    if (!string.IsNullOrEmpty(ext) && !ext.Equals("strm", StringComparison.OrdinalIgnoreCase))
-                    {
-                        input = ext;
-                    }
-                }
-                catch
-                {
-                }
+                input = extracted;
             }
         }
 
@@ -474,15 +601,52 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
              source.Path.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
         {
             source.Protocol = MediaProtocol.Http;
+            source.IsRemote = true;
         }
         else
         {
             source.Protocol = MediaProtocol.File;
+            source.IsRemote = false;
         }
 
         source.Container = NormalizeContainer(source.Container, source.Path);
         source.RequiresOpening = false;
         source.SupportsProbing = true;
+        source.SupportsDirectPlay = true;
+        source.SupportsDirectStream = true;
+        source.SupportsTranscoding = true;
+        source.ReadAtNativeFramerate = false;
+
+        var totalStreamBitrate = 0;
+        if (source.MediaStreams is not null && source.MediaStreams.Count > 0)
+        {
+            foreach (var s in source.MediaStreams)
+            {
+                if (s.BitRate.HasValue && s.BitRate.Value > 0)
+                {
+                    totalStreamBitrate += s.BitRate.Value;
+                }
+            }
+        }
+
+        if (!source.Bitrate.HasValue || source.Bitrate.Value <= 0)
+        {
+            source.Bitrate = totalStreamBitrate > 0 ? totalStreamBitrate : 15_000_000;
+        }
+
+        if (source.MediaStreams is not null)
+        {
+            foreach (var stream in source.MediaStreams)
+            {
+                if (stream.Type == MediaStreamType.Video)
+                {
+                    if (!stream.BitRate.HasValue || stream.BitRate.Value <= 0)
+                    {
+                        stream.BitRate = source.Bitrate ?? 10_000_000;
+                    }
+                }
+            }
+        }
 
         SanitizeDefaultStreamIndices(source);
     }
@@ -601,10 +765,24 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             return Array.Empty<MediaStream>();
         }
 
+        var probeService = _probeServiceFactory?.Invoke();
+        if (probeService is not null && item.Id != Guid.Empty)
+        {
+            if (probeService.TryGetCachedProbeResult(item.Id, out var cached) && HasValidVideoStream(cached.MediaStreams))
+            {
+                return cached.MediaStreams;
+            }
+
+            if (probeService.InMemoryStreams.TryGetValue(item.Id, out var memStreams) && HasValidVideoStream(memStreams))
+            {
+                return memStreams;
+            }
+        }
+
         try
         {
             var streams = item.GetMediaStreams();
-            if (streams is not null && streams.Count > 0)
+            if (streams is not null && HasValidVideoStream(streams))
             {
                 return streams;
             }
@@ -613,16 +791,10 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         {
         }
 
-        var probeService = _probeServiceFactory?.Invoke();
-        if (probeService is not null && probeService.InMemoryStreams.TryGetValue(item.Id, out var memStreams) && memStreams.Count > 0)
-        {
-            return memStreams;
-        }
-
         try
         {
             var streams = _inner.GetMediaStreams(item.Id);
-            if (streams is not null && streams.Count > 0)
+            if (streams is not null && HasValidVideoStream(streams))
             {
                 return streams;
             }
@@ -642,6 +814,33 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             return;
         }
 
+        var probeService = _probeServiceFactory?.Invoke();
+        CachedProbeResult cachedProbe = null;
+        if (probeService is not null && itemId.HasValue && itemId.Value != Guid.Empty)
+        {
+            probeService.TryGetCachedProbeResult(itemId.Value, out cachedProbe);
+        }
+
+        if (cachedProbe is not null)
+        {
+            if (cachedProbe.RunTimeTicks.HasValue && cachedProbe.RunTimeTicks.Value > 0)
+            {
+                source.RunTimeTicks = cachedProbe.RunTimeTicks.Value;
+            }
+            if (cachedProbe.Bitrate.HasValue && cachedProbe.Bitrate.Value > 0)
+            {
+                source.Bitrate = (int)Math.Min(cachedProbe.Bitrate.Value, int.MaxValue);
+            }
+            if (cachedProbe.Size.HasValue && cachedProbe.Size.Value > 0)
+            {
+                source.Size = cachedProbe.Size.Value;
+            }
+            if (!string.IsNullOrEmpty(cachedProbe.Container))
+            {
+                source.Container = NormalizeContainer(cachedProbe.Container, source.Path);
+            }
+        }
+
         // Populate video/audio streams if source lacks a valid video stream
         if (source.MediaStreams == null || source.MediaStreams.Count == 0 || !HasValidVideoStream(source.MediaStreams))
         {
@@ -652,10 +851,13 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             {
                 targetStreams = fallbackStreams;
             }
-            else if (itemId.HasValue)
+            else if (cachedProbe is not null && HasValidVideoStream(cachedProbe.MediaStreams))
             {
-                var probeService = _probeServiceFactory?.Invoke();
-                if (probeService is not null && probeService.InMemoryStreams.TryGetValue(itemId.Value, out var memStreams) && HasValidVideoStream(memStreams))
+                targetStreams = cachedProbe.MediaStreams;
+            }
+            else if (itemId.HasValue && itemId.Value != Guid.Empty && probeService is not null)
+            {
+                if (probeService.InMemoryStreams.TryGetValue(itemId.Value, out var memStreams) && HasValidVideoStream(memStreams))
                 {
                     targetStreams = memStreams;
                 }
@@ -694,9 +896,6 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         }
 
         NormalizeMediaSourceInfo(source);
-        source.SupportsDirectPlay = true;
-        source.SupportsDirectStream = true;
-        source.SupportsTranscoding = true;
     }
 
     private void EnsureStreamCapabilities(IEnumerable<MediaSourceInfo> sources, Guid? itemId = null, IReadOnlyList<MediaStream> fallbackStreams = null)
@@ -863,24 +1062,55 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var source = await _inner.GetMediaSource(item, mediaSourceId, liveStreamId, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
         if (source is not null && ProbeService.IsStrmFile(item?.Path))
         {
+            if (source.Path?.EndsWith(".strm", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                try
+                {
+                    var target = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(target))
+                    {
+                        source.Path = target;
+                        source.Protocol = target.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? MediaProtocol.Http : MediaProtocol.File;
+                        source.IsRemote = source.Protocol == MediaProtocol.Http;
+                    }
+                }
+                catch
+                {
+                }
+            }
             EnsureStreamCapabilities(source, item?.Id);
             SanitizeDefaultStreamIndices(source);
         }
         else if (source is null && item is not null && ProbeService.IsStrmFile(item.Path))
         {
+            string target = null;
+            try
+            {
+                target = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+            var effectivePath = !string.IsNullOrWhiteSpace(target) ? target : item.Path;
+            var isHttp = effectivePath.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+
             source = new MediaSourceInfo
             {
                 Id = item.Id.ToString("N"),
-                Path = item.Path,
-                Protocol = item.Path.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? MediaProtocol.Http : MediaProtocol.File,
-                Container = NormalizeContainer(item.Container, item.Path),
+                Path = effectivePath,
+                Protocol = isHttp ? MediaProtocol.Http : MediaProtocol.File,
+                Container = NormalizeContainer(item.Container, effectivePath),
                 MediaStreams = new List<MediaStream>(),
                 Type = MediaSourceType.Default,
                 SupportsProbing = true,
                 RequiresOpening = false,
                 SupportsDirectPlay = true,
                 SupportsDirectStream = true,
-                SupportsTranscoding = true
+                SupportsTranscoding = true,
+                IsRemote = isHttp,
+                ReadAtNativeFramerate = false,
+                RunTimeTicks = item.RunTimeTicks,
+                Bitrate = 15_000_000
             };
             EnsureStreamCapabilities(source, item.Id);
             SanitizeDefaultStreamIndices(source);

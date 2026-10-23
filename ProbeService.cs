@@ -52,6 +52,20 @@ public enum ProbeMode
 }
 
 /// <summary>
+/// Thread-safe in-memory cache record containing probed media stream descriptors,
+/// container format, bitrate, size, and runtime ticks for an item.
+/// </summary>
+public sealed class CachedProbeResult
+{
+    public required IReadOnlyList<MediaStream> MediaStreams { get; init; }
+    public long? RunTimeTicks { get; init; }
+    public long? Bitrate { get; init; }
+    public long? Size { get; init; }
+    public string? Container { get; init; }
+    public DateTime ProbedAtUtc { get; init; } = DateTime.UtcNow;
+}
+
+/// <summary>
 /// Background service that provides library-wide .strm pre-probing
 /// and automatic probing of newly added items.
 /// </summary>
@@ -169,6 +183,30 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// <summary>Gets in-memory cached media stream descriptors keyed by item ID.</summary>
     public IReadOnlyDictionary<Guid, IReadOnlyList<MediaStream>> InMemoryStreams => _inMemoryStreams;
 
+    private readonly ConcurrentDictionary<Guid, CachedProbeResult> _probeResultCache = new();
+
+    /// <summary>Gets thread-safe in-memory cached probe results keyed by item ID.</summary>
+    public IReadOnlyDictionary<Guid, CachedProbeResult> ProbeResultCache => _probeResultCache;
+
+    /// <summary>
+    /// Attempts to retrieve a cached probe result for the given item ID.
+    /// </summary>
+    public bool TryGetCachedProbeResult(Guid itemId, out CachedProbeResult? result)
+        => _probeResultCache.TryGetValue(itemId, out result);
+
+    internal void ClearProbeResultCache() => _probeResultCache.Clear();
+
+    /// <summary>
+    /// Cancels any active in-flight prewarm stream for the specified item ID.
+    /// </summary>
+    public void CancelPrewarm(Guid itemId)
+    {
+        if (itemId != Guid.Empty)
+        {
+            _vfsPrewarmService?.CancelPrewarm(itemId);
+        }
+    }
+
     /// <summary>Gets the number of queued items currently being persisted (holding a probe slot).</summary>
     public int PersistQueueRunning => ActiveProbes;
 
@@ -264,6 +302,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly IMediaEncoder _mediaEncoder;
     private readonly IMediaSourceManager? _mediaSourceManager;
     private readonly AutoHealService? _autoHealService;
+    private readonly VfsPrewarmService? _vfsPrewarmService;
 
     public ProbeService(
         ILibraryManager libraryManager,
@@ -276,7 +315,8 @@ public sealed class ProbeService : IHostedService, IDisposable
         IItemRepository? itemRepository = null,
         IMediaSourceManager? mediaSourceManager = null,
         AutoHealService? autoHealService = null,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        VfsPrewarmService? vfsPrewarmService = null)
     {
         _telemetryService = telemetryService;
         _libraryManager = libraryManager;
@@ -287,6 +327,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         _mediaSourceManager = mediaSourceManager;
         _autoHealService = autoHealService;
         _preflightClient = httpClient ?? Plugin.HttpClient;
+        _vfsPrewarmService = vfsPrewarmService;
     }
 
     // ── IHostedService lifecycle ──
@@ -1530,6 +1571,18 @@ public sealed class ProbeService : IHostedService, IDisposable
             _inMemoryStreams.Clear();
         }
 
+        if (_probeResultCache.Count > 1000)
+        {
+            var cutoff = DateTime.UtcNow.AddHours(-24);
+            foreach (var kvp in _probeResultCache)
+            {
+                if (kvp.Value.ProbedAtUtc < cutoff)
+                {
+                    _probeResultCache.TryRemove(kvp.Key, out _);
+                }
+            }
+        }
+
         if (sweptUrls > 0 || sweptFailed > 0)
         {
             _logger.LogDebug(
@@ -1582,6 +1635,33 @@ public sealed class ProbeService : IHostedService, IDisposable
         BaseItem? item = null)
     {
         var itemId = item?.Id ?? (Guid.TryParse(source.Id, out var parsedId) ? parsedId : Guid.Empty);
+        if (itemId != Guid.Empty)
+        {
+            _vfsPrewarmService?.CancelPrewarm(itemId);
+
+            if (_probeResultCache.TryGetValue(itemId, out var cachedProbe) &&
+                MediaSourceInterceptor.HasValidVideoStream(cachedProbe.MediaStreams))
+            {
+                _logger.LogInformation("QuickSTRM: Returning cached probe result for inline item {Id}", itemId);
+                if (!string.IsNullOrEmpty(cachedProbe.Container))
+                {
+                    source.Container = cachedProbe.Container;
+                }
+                if (item is not null && !string.IsNullOrEmpty(cachedProbe.Container))
+                {
+                    item.Container = cachedProbe.Container;
+                }
+                return new MediaInfo
+                {
+                    MediaStreams = cachedProbe.MediaStreams.ToArray(),
+                    RunTimeTicks = cachedProbe.RunTimeTicks,
+                    Bitrate = cachedProbe.Bitrate.HasValue ? (int)Math.Min(cachedProbe.Bitrate.Value, int.MaxValue) : null,
+                    Size = cachedProbe.Size,
+                    Container = cachedProbe.Container
+                };
+            }
+        }
+
         if (itemId != Guid.Empty && _inflightProbes.TryGetValue(itemId, out var existingTask))
         {
             _logger.LogInformation("QuickSTRM: Awaiting existing in-flight probe for inline item {Id}", itemId);
@@ -2094,6 +2174,11 @@ public sealed class ProbeService : IHostedService, IDisposable
         CancellationToken ct,
         bool bypassProbeGate = false)
     {
+        if (item.Id != Guid.Empty)
+        {
+            _vfsPrewarmService?.CancelPrewarm(item.Id);
+        }
+
         string? targetUrl;
         if (IsStrmFile(item.Path))
         {
@@ -2271,7 +2356,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
                 if (!string.IsNullOrEmpty(mediaInfo.Container))
                 {
-                    var normalized = MediaSourceInterceptor.NormalizeContainer(mediaInfo.Container, item.Path);
+                    var normalized = MediaSourceInterceptor.NormalizeContainer(mediaInfo.Container, targetUrl ?? item.Path);
                     if (!string.IsNullOrEmpty(normalized))
                     {
                         item.Container = normalized;
@@ -2279,7 +2364,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 }
                 else if (!string.IsNullOrEmpty(item.Container))
                 {
-                    item.Container = MediaSourceInterceptor.NormalizeContainer(item.Container, item.Path);
+                    item.Container = MediaSourceInterceptor.NormalizeContainer(item.Container, targetUrl ?? item.Path);
                 }
 
                 var streams = mediaInfo.MediaStreams?.ToList() ?? new List<MediaStream>();
@@ -2295,7 +2380,33 @@ public sealed class ProbeService : IHostedService, IDisposable
 
                 if (item.Id != Guid.Empty)
                 {
+                    var totalBitrate = mediaInfo.Bitrate;
+                    if (!totalBitrate.HasValue || totalBitrate.Value <= 0)
+                    {
+                        var sum = streams.Where(s => s.BitRate.HasValue && s.BitRate.Value > 0).Sum(s => s.BitRate!.Value);
+                        totalBitrate = sum > 0 ? sum : 15_000_000;
+                    }
+
+                    foreach (var s in streams)
+                    {
+                        if (s.Type == MediaStreamType.Video && (!s.BitRate.HasValue || s.BitRate.Value <= 0))
+                        {
+                            s.BitRate = totalBitrate ?? 10_000_000;
+                        }
+                    }
+
+                    var cached = new CachedProbeResult
+                    {
+                        MediaStreams = streams,
+                        RunTimeTicks = mediaInfo.RunTimeTicks ?? item.RunTimeTicks,
+                        Bitrate = totalBitrate,
+                        Size = mediaInfo.Size ?? item.Size,
+                        Container = item.Container,
+                        ProbedAtUtc = DateTime.UtcNow
+                    };
+                    _probeResultCache[item.Id] = cached;
                     _inMemoryStreams[item.Id] = streams;
+
                     await _itemRepository.SaveMediaStreamsAsync(item.Id, streams, CancellationToken.None).ConfigureAwait(false);
 
                     try

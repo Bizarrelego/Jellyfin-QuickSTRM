@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.12] - 2026-10-23
+
+### 🚀 Universal .STRM DirectPlay Handshake, Inline Probe Storm Elimination & Socket Collision Protection
+
+Comprehensive stability and playback fix eliminating rapid inline probe storms (7x probes in 2 seconds) during client playback handshakes on Moonfin, Jellyfin Media Player, and Android TV / Fire TV (ExoPlayer), enforcing full DirectPlay and DirectStream compatibility flags across MediaSourceInfo and media streams, normalizing query parameter containers on Infinidysk URLs (`&extension=mkv`), and preventing VfsPrewarmService socket collisions during inline probes.
+
+### Added
+- **Fast In-Memory Probe Cache & 30s Inline Cooldown (`ProbeService.cs` & `MediaSourceInterceptor.cs`)**:
+  - Implemented `ConcurrentDictionary<Guid, CachedProbeResult> _probeResultCache` in `ProbeService` to cache probed stream descriptors, runtime ticks, container, size, and bitrate in memory.
+  - Added 30-second TTL cooldown latch `_recentInlineProbeAttempts` in `MediaSourceInterceptor` ensuring high-frequency concurrent controller requests (`PlaybackInfo`, `master.m3u8`, `main.m3u8`, `Items/{id}`) never trigger duplicate or redundant inline probes.
+  - Checked `ProbeService.ProbeResultCache` as the primary evaluation point in `GetPlaybackMediaSources` and `GetItemStreams`, avoiding stale BaseItem or incomplete SQLite stream reads.
+- **Universal DirectPlay, Remux & Transcode Flag Integrity (`MediaSourceInterceptor.cs`)**:
+  - Populates complete `MediaSourceInfo` playback descriptors: `Protocol = MediaProtocol.Http` for remote streams, `Path = targetUrl`, `IsRemote = true`, `ReadAtNativeFramerate = false`, `SupportsDirectPlay = true`, `SupportsDirectStream = true`, `SupportsTranscoding = true`.
+  - Enforces non-null and positive `BitRate` on all `MediaStreamType.Video` streams (defaulting to container bitrate or `10_000_000` bps) and populates `MediaSourceInfo.Bitrate` (`15_000_000` bps fallback), preventing Jellyfin's `MediaInfoHelper` from rejecting DirectPlay or failing bitrate checks.
+  - Injects probed `RunTimeTicks` into `MediaSourceInfo`, enabling pristine HLS VOD playlist generation without player aborts.
+- **Infinidysk & Query Parameter Container Normalization (`MediaSourceInterceptor.NormalizeContainer`)**:
+  - Parses query string extensions (`extension=`, `format=`, `ext=`) across complex upstream URLs (e.g., `.../view/.ids/...?downloadKey=...&extension=mkv`), correctly identifying Matroska and MP4 containers when URLs lack file path extensions.
+- **Zero-Contention Pre-Warm Socket Cancellation (`ProbeService.cs`)**:
+  - Automatically cancels active in-flight prewarm streams via `_vfsPrewarmService.CancelPrewarm(item.Id)` at the start of `ExecuteCoreProbeAsync` and `ProbeOneInlineAsync`, granting FFprobe and Jellyfin exclusive socket access without upstream socket starvation.
+- **Automated Regression & Handshake Tests (`MediaSourceInterceptorTests.cs`)**:
+  - Added unit test `NormalizeContainer_InfinidyskUrlWithQueryParameterExtension_ExtractsCorrectContainer` validating query extension extraction.
+  - Added unit test `NormalizeMediaSourceInfo_PopulatesDirectPlayAndStreamBitrates` verifying DirectPlay readiness and video stream bitrates.
+  - Added unit test `GetPlaybackMediaSources_CachedProbeResultInProbeService_ReturnsImmediatelyWithoutProbing` verifying 0ms cached retrieval.
+  - Added unit test `GetPlaybackMediaSources_UnprobedItem_RepeatedCallsWithinCooldown_OnlyProbesOnce` confirming duplicate probe elimination.
+
+---
 ## [4.2.11] - 2026-10-23
 
 ### 🛡️ StreamingHelpers Transcoder Empty Source Crash Elimination & In-Flight MediaInfo Coalescing
