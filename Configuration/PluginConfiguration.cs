@@ -13,7 +13,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets a value indicating whether to automatically probe
     /// newly added .strm items that lack stream info.
     /// </summary>
-    public bool EnableAutoProbe { get; set; }
+    public bool EnableAutoProbe { get; set; } = true;
 
     /// <summary>
     /// Gets or sets a value indicating whether proactive 3:00 AM sweep is enabled.

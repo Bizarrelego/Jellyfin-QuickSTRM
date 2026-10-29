@@ -147,7 +147,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         lock (_workerLock)
         {
-            _workerTasks.RemoveAll(t => t.IsCompleted);
+            _workerTasks.RemoveAll(static t => t.IsCompleted);
             while (_workerTasks.Count < MaxConcurrentProbes)
             {
                 _workerTasks.Add(Task.Run(() => ProcessQueueLoopAsync(_shutdownCts.Token)));
@@ -334,7 +334,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _libraryManager.ItemAdded += OnItemAdded;
+        _libraryManager.ItemAdded += OnItemAddedOrUpdated;
+        _libraryManager.ItemUpdated += OnItemAddedOrUpdated;
 
         EnsureConsumerRunning();
 
@@ -349,7 +350,8 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _libraryManager.ItemAdded -= OnItemAdded;
+        _libraryManager.ItemAdded -= OnItemAddedOrUpdated;
+        _libraryManager.ItemUpdated -= OnItemAddedOrUpdated;
         _shutdownCts.Cancel();
         _highPriorityChannel.Writer.TryComplete();
         _lowPriorityChannel.Writer.TryComplete();
@@ -372,23 +374,23 @@ public sealed class ProbeService : IHostedService, IDisposable
 
     // ── Auto-probe on item added ──
 
-    private void OnItemAdded(object? sender, ItemChangeEventArgs e)
+    private void OnItemAddedOrUpdated(object? sender, ItemChangeEventArgs e)
     {
         var config = Plugin.Instance?.Configuration;
-        if (config is not { EnableAutoProbe: true })
+        if (config is { EnableAutoProbe: false })
         {
             return;
         }
 
         var item = e.Item;
-        if (!IsStrmItem(item) || HasStreamInfo(item))
+        if (item is null || !IsStrmFile(item) || HasStreamInfo(item))
         {
             return;
         }
 
         // protects low-end CPUs and memory: routed through the SAME bounded (500), de-duplicated, negative-cached queue as playback
         // persistence, so a bulk import can no longer spawn one unbounded parked Task per added item; the 2-slot gate still applies
-        _logger.LogInformation("QuickSTRM: Auto-probing new item {Name}", item.Name);
+        // Strictly non-blocking: routed through the bounded, deduplicated, negative-cached background channel
         EnqueueBackgroundPersist(item);
     }
 
@@ -590,7 +592,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                         _activeProbeNames.TryRemove(item.Id, out _);
                         _pendingPersist.TryRemove(item.Id, out _);
                         Interlocked.Decrement(ref _activeProbes);
-                        _probeThrottle.Release();
+                        ReleaseQuietly(_probeThrottle);
                         if (Volatile.Read(ref _activeProbes) == 0 &&
                             _highPriorityChannel.Reader.Count == 0 &&
                             _lowPriorityChannel.Reader.Count == 0 &&
@@ -599,14 +601,14 @@ public sealed class ProbeService : IHostedService, IDisposable
                             Interlocked.Exchange(ref _isBatchRunning, 0);
                         }
                     }
-                }, ct);
+                }, CancellationToken.None);
             }
             catch (Exception)
             {
                 _activeProbeNames.TryRemove(item.Id, out _);
                 _pendingPersist.TryRemove(item.Id, out _);
                 Interlocked.Decrement(ref _activeProbes);
-                _probeThrottle.Release();
+                ReleaseQuietly(_probeThrottle);
                 throw;
             }
         }
@@ -653,7 +655,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             {
                 _circuitTripped = false;
                 _logger.LogInformation("QuickSTRM: Circuit breaker manually reset to closed");
-                _ = _telemetryService.LogCircuitBreakerAsync("Reset", "Circuit breaker manually reset to closed.");
+                _ = _telemetryService?.LogCircuitBreakerAsync("Reset", "Circuit breaker manually reset to closed.");
             }
         }
     }
@@ -697,7 +699,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                         "QuickSTRM: Circuit breaker TRIPPED after {Count} consecutive failures. Queue processing and auto-deletion halted; retrying automatically in {Minutes} minutes (or reset manually)",
                         n,
                         CircuitCooldown.TotalMinutes);
-                    _ = _telemetryService.LogCircuitBreakerAsync(
+                    _ = _telemetryService?.LogCircuitBreakerAsync(
                         "Tripped",
                         $"Circuit breaker tripped after {n} consecutive failures. Cloud mount down. Retrying in {CircuitCooldown.TotalMinutes:0} minutes.");
                 }
@@ -756,7 +758,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                     Interlocked.Exchange(ref _circuitTrippedAtTicks, 0);
                     _circuitTripped = false;
                     _logger.LogInformation("QuickSTRM: Half-open trial succeeded; circuit breaker closed, queue processing resumed");
-                    _ = _telemetryService.LogCircuitBreakerAsync("Reset", "Half-open trial succeeded; circuit breaker closed, queue processing resumed.");
+                    _ = _telemetryService?.LogCircuitBreakerAsync("Reset", "Half-open trial succeeded; circuit breaker closed, queue processing resumed.");
                 }
                 else
                 {
@@ -775,7 +777,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     // fire-and-forget admin notification in Jellyfin's activity log; never allowed to throw into the probe path
     private void Notify(string message)
     {
-        _ = _telemetryService.LogEventAsync("QuickSTRM", message);
+        _ = _telemetryService?.LogEventAsync("QuickSTRM", message);
     }
 
     /// <summary>
@@ -1806,6 +1808,8 @@ public sealed class ProbeService : IHostedService, IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsStrmFile(BaseItem? item) => item is not null && IsStrmFile(item.Path);
+
     public static bool IsStrmFile(string? path)
     {
         return path is not null && IsStrmFile(path.AsSpan());
@@ -2195,7 +2199,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 }
                 else if (ex is not (FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException))
                 {
-                    _logger.LogWarning("QuickSTRM: Cannot read .strm file {Path}: {Message}", item.Path, ex.Message);
+                    if (item is not null) { return await HandleProbeStrikeFailureAsync(item, ex, ct, FailureKind.TemporaryFailure).ConfigureAwait(false); }
                     return null;
                 }
 
@@ -2371,6 +2375,10 @@ public sealed class ProbeService : IHostedService, IDisposable
                 for (var i = 0; i < streams.Count; i++)
                 {
                     streams[i].Index = i;
+                    if (!string.IsNullOrWhiteSpace(streams[i].Codec))
+                    {
+                        streams[i].Codec = MediaSourceInterceptor.NormalizeCodec(streams[i].Codec, streams[i].Type);
+                    }
                 }
 
                 if (HasStreamInfo(item))
@@ -2385,13 +2393,14 @@ public sealed class ProbeService : IHostedService, IDisposable
                     {
                         var sum = streams.Where(s => s.BitRate.HasValue && s.BitRate.Value > 0).Sum(s => s.BitRate!.Value);
                         totalBitrate = sum > 0 ? sum : 15_000_000;
+                        mediaInfo.Bitrate = (int)Math.Min(totalBitrate.Value, int.MaxValue);
                     }
 
                     foreach (var s in streams)
                     {
                         if (s.Type == MediaStreamType.Video && (!s.BitRate.HasValue || s.BitRate.Value <= 0))
                         {
-                            s.BitRate = totalBitrate ?? 10_000_000;
+                            s.BitRate = totalBitrate ?? 15_000_000;
                         }
                     }
 
@@ -2421,7 +2430,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 }
 
                 RecordSuccess();
-                _telemetryService.IncrementProbed();
+                _telemetryService?.IncrementProbed();
 
                 // SUCCESS PATH: Reset retry count on successful probe & stream persistence
                 if (item.Id != Guid.Empty)
@@ -2454,7 +2463,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         }
     }
 
-    private async Task<MediaInfo?> HandleProbeStrikeFailureAsync(BaseItem item, Exception ex, CancellationToken ct, FailureKind kind = FailureKind.TemporaryFailure)
+    private async Task<MediaInfo?> HandleProbeStrikeFailureAsync(BaseItem item, Exception ex, CancellationToken ct, FailureKind kind = FailureKind.TemporaryFailure) { try
     {
         // For confirmed permanent failures (e.g. .strm file permanently missing from readable mount),
         // if auto-delete is not disabled, proceed straight to auto-heal without requiring 3 strikes over 45 minutes
@@ -2496,7 +2505,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         _itemRetryCounts.TryRemove(item.Id, out _);
         RecordFailure();
-        await AutoHealDeadItemAsync(item, ct).ConfigureAwait(false);
+        await AutoHealDeadItemAsync(item, ct).ConfigureAwait(false); } catch (Exception innerEx) { _logger?.LogWarning(innerEx, "QuickSTRM: Error in HandleProbeStrikeFailureAsync for {Name}", item?.Name); }
         return null;
     }
 
@@ -2601,7 +2610,8 @@ public sealed class ProbeService : IHostedService, IDisposable
             return;
         }
 
-        _libraryManager.ItemAdded -= OnItemAdded;
+        _libraryManager.ItemAdded -= OnItemAddedOrUpdated;
+        _libraryManager.ItemUpdated -= OnItemAddedOrUpdated;
 
         // 1) cancel first so in-flight HEADs, queued probes and ffprobe-owning refreshes stop before their gates disappear
         try

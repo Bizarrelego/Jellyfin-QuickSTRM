@@ -24,8 +24,20 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // Register TelemetryService as singleton for native activity logging and action ledger
         serviceCollection.AddSingleton<TelemetryService>();
 
-        // Register ProbeService as singleton + hosted service for ItemAdded event and queue lifecycle
-        serviceCollection.AddSingleton<ProbeService>();
+        // Register ProbeService as singleton + hosted service for ItemAdded/ItemUpdated events and queue lifecycle
+        serviceCollection.AddSingleton<ProbeService>(sp => new ProbeService(
+            sp.GetRequiredService<ILibraryManager>(),
+            sp.GetRequiredService<MediaBrowser.Controller.Providers.IDirectoryService>(),
+            sp.GetRequiredService<MediaBrowser.Controller.MediaEncoding.IMediaEncoder>(),
+            sp.GetService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
+            sp.GetRequiredService<MediaBrowser.Model.Activity.IActivityManager>(),
+            sp.GetRequiredService<ILogger<ProbeService>>(),
+            sp.GetRequiredService<TelemetryService>(),
+            sp.GetService<MediaBrowser.Controller.Persistence.IItemRepository>(),
+            sp.GetService<IMediaSourceManager>(),
+            sp.GetService<AutoHealService>(),
+            null,
+            sp.GetService<VfsPrewarmService>()));
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ProbeService>());
 
         // Register AutoHealService as singleton + hosted service for event-driven list pruning
@@ -47,6 +59,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
 
         // Register ProactiveSweeperTask as transient IScheduledTask so Jellyfin's task engine picks it up on startup
         serviceCollection.AddTransient<IScheduledTask, ProactiveSweeperTask>();
+
+        // Register StrmProbeTask as IScheduledTask so Jellyfin displays it in Dashboard -> Scheduled Tasks
+        serviceCollection.AddTransient<IScheduledTask, StrmProbeTask>();
 
         // Decorate IMediaSourceManager with our interceptor
         var descriptor = serviceCollection.FirstOrDefault(d => d.ServiceType == typeof(IMediaSourceManager));

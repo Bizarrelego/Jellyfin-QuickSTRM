@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [4.2.13] - 2026-10-29
+
+### 🛡️ Autonomous Resilience Audit, Instant Event-Driven Ingestion & Universal Playback Payload Hardening
+
+Comprehensive resilience and playback hardening release implementing instant event-driven `.strm` ingestion (`ItemAdded` & `ItemUpdated`), 15 Mbps synthetic bitrate fallback persistence for Fire Stick 4K / ExoPlayer Direct Play, strict video/audio codec normalization (`h264`, `hevc`, `av1` / `aac`, `ac3`, `eac3`), unconditional URL query container overrides, and zero-leak concurrency guarantees across `SemaphoreSlim(4, 4)` and `ExecuteCoreProbeAsync`.
+
+### Added
+- **Instant New Media Ingestion (`ProbeService.cs` & `PluginConfiguration.cs`)**:
+  - Subscribed to both `ILibraryManager.ItemAdded` and `ILibraryManager.ItemUpdated` events in `ProbeService.StartAsync` (with clean unsubscription in `StopAsync` and `Dispose`).
+  - Enabled `EnableAutoProbe = true` by default so newly detected or updated `.strm` files are verified via `IsStrmFile(e.Item)` and immediately enqueued into the non-blocking background persistence channel without stalling Jellyfin's library scanner.
+- **Universal Playback Payload Hardening (`MediaSourceInterceptor.cs` & `ProbeService.cs`)**:
+  - **15 Mbps Synthetic Bitrate Fallback**: Injects a synthetic `15000000` (15 Mbps) bitrate into `MediaSourceInfo`, video `MediaStream.BitRate`, in-memory `CachedProbeResult`, and SQLite persistence (`SaveMediaStreamsAsync`) whenever `ffprobe` returns a null or zero bitrate, preventing Fire Stick 4K / ExoPlayer from falling back to software transcoding.
+  - **Strict Codec Normalization (`NormalizeCodec`)**: Strips proprietary formatting from `stream.Codec`, normalizing video codecs strictly to `h264`, `hevc`, or `av1`, and audio codecs to `aac`, `ac3`, or `eac3`.
+  - **Unconditional Query Container Override (`NormalizeContainer`)**: Ensures URL query parameters (`?extension=mp4`, `&extension=mkv`, `format=`, `ext=`) unconditionally override internal FFmpeg comma-separated container strings (`matroska,webm`, `mov,mp4,m4a,3gp,3g2,mj2`).
+- **Concurrency & Deadlock Hardening (`ProbeService.cs`)**:
+  - Hardened `ProcessQueueLoopAsync` with `CancellationToken.None` on the worker `Task.Run` wrapper and `ReleaseQuietly(_probeThrottle)` in `try/finally` blocks so no code path can ever leak a `SemaphoreSlim(4, 4)` slot.
+  - Hardened `ExecuteCoreProbeAsync` and `HandleProbeStrikeFailureAsync` so 100% of network timeouts, `FfmpegException`s, JSON/format errors, and unexpected exceptions are caught locally, recorded as strikes in `_itemRetryCounts`, and never bubble up to the consumer loop.
+- **Automated Endurance & Playback Validation Suite (`EnduranceTests.cs`)**:
+  - Added `Simulate500ConcurrentItemAddedEvents_EnforcesStrictSemaphoreSlim4ConcurrencyLimit_FlatCpu_ZeroGen0DuringFlood` verifying strict 4-slot concurrency, flat CPU usage, and 0 Gen0 allocations during a 500-item concurrent flood.
+  - Added `PlaybackInfoRequest_UnprobedItem_ExecutesInlineProbe_CachesInMemory_PersistsToSqlite_CancelsInFlightVfsPrewarm_AndNormalizesPayload` verifying inline probing, memory caching, SQLite persistence, and immediate cancellation of in-flight `VfsPrewarmService` HTTP Range requests.
+
+---
 ## [4.2.12] - 2026-10-23
 
 ### 🚀 Universal .STRM DirectPlay Handshake, Inline Probe Storm Elimination & Socket Collision Protection

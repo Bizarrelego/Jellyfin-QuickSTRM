@@ -450,7 +450,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         return resolved;
     }
 
-    private static string ExtractExtensionFromPathOrUrl(string path)
+    private static string ExtractQueryExtensionFromUrl(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -459,49 +459,71 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         try
         {
-            if (Uri.TryCreate(path, UriKind.Absolute, out var uri))
+            if (Uri.TryCreate(path, UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Query))
             {
-                if (!string.IsNullOrEmpty(uri.Query))
+                var query = uri.Query.AsSpan();
+                string[] paramNames = ["extension=", "format=", "ext="];
+                foreach (var param in paramNames)
                 {
-                    var query = uri.Query.AsSpan();
-                    string[] paramNames = ["extension=", "format=", "ext="];
-                    foreach (var param in paramNames)
+                    var idx = 0;
+                    while (idx < query.Length)
                     {
-                        var idx = 0;
-                        while (idx < query.Length)
+                        var matchIdx = query.Slice(idx).IndexOf(param.AsSpan(), StringComparison.OrdinalIgnoreCase);
+                        if (matchIdx < 0)
                         {
-                            var matchIdx = query.Slice(idx).IndexOf(param.AsSpan(), StringComparison.OrdinalIgnoreCase);
-                            if (matchIdx < 0)
-                            {
-                                break;
-                            }
-
-                            var absMatchIdx = idx + matchIdx;
-                            if (absMatchIdx == 0 || query[absMatchIdx - 1] == '?' || query[absMatchIdx - 1] == '&')
-                            {
-                                var slice = query.Slice(absMatchIdx + param.Length);
-                                var ampIdx = slice.IndexOf('&');
-                                if (ampIdx >= 0)
-                                {
-                                    slice = slice.Slice(0, ampIdx);
-                                }
-
-                                slice = slice.TrimStart('.');
-                                if (!slice.IsEmpty)
-                                {
-                                    var ext = slice.ToString();
-                                    if (!ext.Equals("strm", StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        return ext;
-                                    }
-                                }
-                            }
-
-                            idx = absMatchIdx + param.Length;
+                            break;
                         }
+
+                        var absMatchIdx = idx + matchIdx;
+                        if (absMatchIdx == 0 || query[absMatchIdx - 1] == '?' || query[absMatchIdx - 1] == '&')
+                        {
+                            var slice = query.Slice(absMatchIdx + param.Length);
+                            var ampIdx = slice.IndexOf('&');
+                            if (ampIdx >= 0)
+                            {
+                                slice = slice.Slice(0, ampIdx);
+                            }
+
+                            slice = slice.TrimStart('.');
+                            if (!slice.IsEmpty)
+                            {
+                                var ext = slice.ToString();
+                                if (!ext.Equals("strm", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    return ext;
+                                }
+                            }
+                        }
+
+                        idx = absMatchIdx + param.Length;
                     }
                 }
+            }
+        }
+        catch
+        {
+        }
 
+        return null;
+    }
+
+    private static string ExtractExtensionFromPathOrUrl(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var queryExt = ExtractQueryExtensionFromUrl(path);
+        if (!string.IsNullOrEmpty(queryExt))
+        {
+            return queryExt;
+        }
+
+        try
+        {
+            if (Uri.TryCreate(path, UriKind.Absolute, out var uri))
+            {
                 var pathExt = System.IO.Path.GetExtension(uri.AbsolutePath).TrimStart('.').Trim();
                 if (!string.IsNullOrEmpty(pathExt) && !pathExt.Equals("strm", StringComparison.OrdinalIgnoreCase))
                 {
@@ -526,7 +548,10 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
     public static string NormalizeContainer(string container, string path = null)
     {
-        var input = container?.Trim();
+        // URL query parameter (?extension=mp4 or &extension=mkv) absolutely overrides any internal FFmpeg comma-separated container string
+        var queryOverride = ExtractQueryExtensionFromUrl(path);
+        var input = !string.IsNullOrEmpty(queryOverride) ? queryOverride : container?.Trim();
+
         if (string.Equals(input, "strm", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(input))
         {
             var extracted = ExtractExtensionFromPathOrUrl(path);
@@ -589,6 +614,73 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         return input;
     }
 
+    public static string NormalizeCodec(string codec, MediaStreamType streamType)
+    {
+        if (string.IsNullOrWhiteSpace(codec))
+        {
+            return codec;
+        }
+
+        var c = codec.Trim().ToLowerInvariant();
+        if (streamType == MediaStreamType.Video)
+        {
+            if (c.Contains("hevc", StringComparison.Ordinal) ||
+                c.Contains("h265", StringComparison.Ordinal) ||
+                c.Contains("x265", StringComparison.Ordinal) ||
+                c.Contains("hev1", StringComparison.Ordinal) ||
+                c.Contains("hvc1", StringComparison.Ordinal))
+            {
+                return "hevc";
+            }
+
+            if (c.Contains("av1", StringComparison.Ordinal) ||
+                c.Contains("av01", StringComparison.Ordinal))
+            {
+                return "av1";
+            }
+
+            if (c.Contains("h264", StringComparison.Ordinal) ||
+                c.Contains("avc", StringComparison.Ordinal) ||
+                c.Contains("x264", StringComparison.Ordinal))
+            {
+                return "h264";
+            }
+
+            return c;
+        }
+
+        if (streamType == MediaStreamType.Audio)
+        {
+            if (c.Contains("eac3", StringComparison.Ordinal) ||
+                c.Contains("e-ac-3", StringComparison.Ordinal) ||
+                c.Contains("e-ac3", StringComparison.Ordinal) ||
+                c.Contains("ec-3", StringComparison.Ordinal) ||
+                c.Contains("ec3", StringComparison.Ordinal) ||
+                c.Contains("dd+", StringComparison.Ordinal) ||
+                c.Contains("ddp", StringComparison.Ordinal))
+            {
+                return "eac3";
+            }
+
+            if (c.Contains("ac3", StringComparison.Ordinal) ||
+                c.Contains("ac-3", StringComparison.Ordinal) ||
+                c.Contains("a52", StringComparison.Ordinal))
+            {
+                return "ac3";
+            }
+
+            if (c.Contains("aac", StringComparison.Ordinal) ||
+                c.Contains("mp4a", StringComparison.Ordinal))
+            {
+                return "aac";
+            }
+
+            return c;
+        }
+
+        return c;
+    }
+
     public static void NormalizeMediaSourceInfo(MediaSourceInfo source)
     {
         if (source is null)
@@ -622,6 +714,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         {
             foreach (var s in source.MediaStreams)
             {
+                if (!string.IsNullOrWhiteSpace(s.Codec))
+                {
+                    s.Codec = NormalizeCodec(s.Codec, s.Type);
+                }
+
                 if (s.BitRate.HasValue && s.BitRate.Value > 0)
                 {
                     totalStreamBitrate += s.BitRate.Value;
@@ -642,7 +739,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 {
                     if (!stream.BitRate.HasValue || stream.BitRate.Value <= 0)
                     {
-                        stream.BitRate = source.Bitrate ?? 10_000_000;
+                        stream.BitRate = source.Bitrate ?? 15_000_000;
                     }
                 }
             }
