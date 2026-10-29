@@ -127,6 +127,14 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// <summary>Gets the current consecutive failure retry counts for items.</summary>
     public IReadOnlyDictionary<Guid, int> ItemRetryCounts => _itemRetryCounts;
 
+    // Staged backlog queue for multi-batch library scans exceeding MaxPendingPersist (500)
+    private readonly ConcurrentQueue<(BaseItem Item, bool Force)> _stagedBatchQueue = new();
+    private readonly ConcurrentDictionary<Guid, byte> _stagedItemIds = new();
+    private readonly object _replenishLock = new();
+
+    /// <summary>Gets the number of items staged in the multi-batch continuation backlog.</summary>
+    public int StagedQueueCount => _stagedItemIds.Count;
+
     private readonly Channel<BaseItem> _highPriorityChannel = Channel.CreateBounded<BaseItem>(
         new BoundedChannelOptions(MaxPendingPersist) { FullMode = BoundedChannelFullMode.DropWrite });
     private readonly Channel<BaseItem> _lowPriorityChannel = Channel.CreateBounded<BaseItem>(
@@ -173,7 +181,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     public int LowPriorityQueueWaiting => _lowPriorityChannel.Reader.Count;
 
     /// <summary>Gets the number of items queued for background persistence that are still waiting for a probe slot.</summary>
-    public int PersistQueueWaiting => HighPriorityQueueWaiting + LowPriorityQueueWaiting;
+    public int PersistQueueWaiting => HighPriorityQueueWaiting + LowPriorityQueueWaiting + StagedQueueCount;
 
     /// <summary>Gets the total number of items currently waiting in the persistence queues.</summary>
     public int QueueCount => PersistQueueWaiting;
@@ -459,11 +467,10 @@ public sealed class ProbeService : IHostedService, IDisposable
             return false;
         }
 
-        // protects memory: bounded queue ceiling across both lanes
+        // protects memory: bounded queue ceiling across both lanes; overflow items are staged for sequential batch continuation
         if (_pendingPersist.Count >= MaxPendingPersist)
         {
-            _logger.LogWarning("QuickSTRM: Persist queue full ({Max}); dropping {Name}", MaxPendingPersist, item.Name);
-            return false;
+            return StageForNextBatch(item, force);
         }
 
         // atomic deduplication: concurrent plays/requests of the same item race safely and exactly one wins
@@ -476,13 +483,91 @@ public sealed class ProbeService : IHostedService, IDisposable
         if (!channel.Writer.TryWrite(item))
         {
             _pendingPersist.TryRemove(item.Id, out _);
-            _logger.LogWarning("QuickSTRM: Could not enqueue {Priority} priority item {Name}; channel full", highPriority ? "High" : "Low", item.Name);
-            return false;
+            return StageForNextBatch(item, force);
         }
 
         Interlocked.Exchange(ref _isBatchRunning, 1);
         EnsureConsumerRunning();
         return true;
+    }
+
+    private bool StageForNextBatch(BaseItem item, bool force)
+    {
+        if (_pendingPersist.ContainsKey(item.Id))
+        {
+            return false;
+        }
+
+        if (!_stagedItemIds.TryAdd(item.Id, 0))
+        {
+            return false;
+        }
+
+        _stagedBatchQueue.Enqueue((item, force));
+        Interlocked.Exchange(ref _isBatchRunning, 1);
+        return true;
+    }
+
+    private void ReplenishFromStagedBatches()
+    {
+        if (_stagedBatchQueue.IsEmpty || _shutdownCts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (_circuitTripped && (CircuitCooldownRemaining > TimeSpan.Zero || Volatile.Read(ref _halfOpenInFlight) != 0))
+        {
+            return;
+        }
+
+        lock (_replenishLock)
+        {
+            var replenished = 0;
+            while (_pendingPersist.Count < MaxPendingPersist && _stagedBatchQueue.TryDequeue(out var staged))
+            {
+                _stagedItemIds.TryRemove(staged.Item.Id, out _);
+
+                if (!staged.Force && HasStreamInfo(staged.Item))
+                {
+                    continue;
+                }
+
+                if (_failedPersistCache.TryGetValue(staged.Item.Id, out var expiresAt))
+                {
+                    if (expiresAt > DateTime.UtcNow)
+                    {
+                        continue;
+                    }
+                    _failedPersistCache.TryRemove(staged.Item.Id, out _);
+                }
+
+                if (!_pendingPersist.TryAdd(staged.Item.Id, 0))
+                {
+                    continue;
+                }
+
+                if (!_lowPriorityChannel.Writer.TryWrite(staged.Item))
+                {
+                    _pendingPersist.TryRemove(staged.Item.Id, out _);
+                    if (_stagedItemIds.TryAdd(staged.Item.Id, 0))
+                    {
+                        _stagedBatchQueue.Enqueue(staged);
+                    }
+                    break;
+                }
+
+                replenished++;
+            }
+
+            if (replenished > 0)
+            {
+                Interlocked.Exchange(ref _isBatchRunning, 1);
+                _logger.LogInformation(
+                    "QuickSTRM: Queued next batch of {Replenished} items from backlog ({Remaining} staged items remaining)",
+                    replenished,
+                    _stagedItemIds.Count);
+            }
+        }
     }
 
     /// <summary>
@@ -514,6 +599,15 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
             else
             {
+                if (!_stagedBatchQueue.IsEmpty)
+                {
+                    ReplenishFromStagedBatches();
+                    if (_highPriorityChannel.Reader.TryRead(out item) || _lowPriorityChannel.Reader.TryRead(out item))
+                    {
+                        goto DispatchItem;
+                    }
+                }
+
                 // 3. Await whichever channel has an item available
                 try
                 {
@@ -535,6 +629,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 }
             }
 
+            DispatchItem:
             if (item is null)
             {
                 continue;
@@ -593,9 +688,14 @@ public sealed class ProbeService : IHostedService, IDisposable
                         _pendingPersist.TryRemove(item.Id, out _);
                         Interlocked.Decrement(ref _activeProbes);
                         ReleaseQuietly(_probeThrottle);
+                        if (_lowPriorityChannel.Reader.Count == 0 && !_stagedBatchQueue.IsEmpty)
+                        {
+                            ReplenishFromStagedBatches();
+                        }
                         if (Volatile.Read(ref _activeProbes) == 0 &&
                             _highPriorityChannel.Reader.Count == 0 &&
                             _lowPriorityChannel.Reader.Count == 0 &&
+                            _stagedBatchQueue.IsEmpty &&
                             Volatile.Read(ref _isScanningLibrary) == 0)
                         {
                             Interlocked.Exchange(ref _isBatchRunning, 0);
@@ -1781,9 +1881,14 @@ public sealed class ProbeService : IHostedService, IDisposable
             finally
             {
                 Interlocked.Exchange(ref _isScanningLibrary, 0);
+                if (_lowPriorityChannel.Reader.Count == 0 && !_stagedBatchQueue.IsEmpty)
+                {
+                    ReplenishFromStagedBatches();
+                }
                 if (Volatile.Read(ref _activeProbes) == 0 &&
                     _highPriorityChannel.Reader.Count == 0 &&
-                    _lowPriorityChannel.Reader.Count == 0)
+                    _lowPriorityChannel.Reader.Count == 0 &&
+                    _stagedBatchQueue.IsEmpty)
                 {
                     Interlocked.Exchange(ref _isBatchRunning, 0);
                 }
@@ -1984,9 +2089,13 @@ public sealed class ProbeService : IHostedService, IDisposable
             }
         }
 
+        var stagedCount = _stagedItemIds.Count;
+        var activeQueued = Math.Max(0, enqueuedCount - stagedCount);
         _logger.LogInformation(
-            "QuickSTRM: Background library scan completed for {Mode} probe; enqueued {Count} items into low-priority channel",
+            "QuickSTRM: Background library scan completed for {Mode} probe; enqueued {ActiveCount} items into active batch and staged {StagedCount} additional items ({TotalCount} total)",
             mode,
+            activeQueued,
+            stagedCount,
             enqueuedCount);
     }
 
@@ -2044,6 +2153,10 @@ public sealed class ProbeService : IHostedService, IDisposable
     {
         Interlocked.Exchange(ref _isScanningLibrary, 0);
         Interlocked.Exchange(ref _isBatchRunning, 0);
+        while (_stagedBatchQueue.TryDequeue(out _))
+        {
+        }
+        _stagedItemIds.Clear();
         lock (_lock)
         {
             if (_cts is { IsCancellationRequested: false })
@@ -2358,6 +2471,11 @@ public sealed class ProbeService : IHostedService, IDisposable
                     item.RunTimeTicks = mediaInfo.RunTimeTicks.Value;
                 }
 
+                if (mediaInfo.Size.HasValue && mediaInfo.Size.Value > 0)
+                {
+                    item.Size = mediaInfo.Size.Value;
+                }
+
                 if (!string.IsNullOrEmpty(mediaInfo.Container))
                 {
                     var normalized = MediaSourceInterceptor.NormalizeContainer(mediaInfo.Container, targetUrl ?? item.Path);
@@ -2374,11 +2492,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                 var streams = mediaInfo.MediaStreams?.ToList() ?? new List<MediaStream>();
                 for (var i = 0; i < streams.Count; i++)
                 {
-                    streams[i].Index = i;
-                    if (!string.IsNullOrWhiteSpace(streams[i].Codec))
-                    {
-                        streams[i].Codec = MediaSourceInterceptor.NormalizeCodec(streams[i].Codec, streams[i].Type);
-                    }
+                    MediaSourceInterceptor.EnrichMediaStream(streams[i], i, item.Id);
                 }
 
                 if (HasStreamInfo(item))
@@ -2452,7 +2566,8 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             return null;
         }
-        catch (Exception ex) when (ex is TimeoutException or HttpRequestException or FfmpegException or FileNotFoundException)
+        catch (Exception ex) when (ex is TimeoutException or HttpRequestException or FfmpegException or FileNotFoundException ||
+                                   ex.GetType().Name.Contains("FfmpegException", StringComparison.OrdinalIgnoreCase))
         {
             return await HandleProbeStrikeFailureAsync(item, ex, ct).ConfigureAwait(false);
         }
@@ -2627,6 +2742,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         _failedPersistCache.Clear();
         _inflightProbes.Clear();
         _pendingPersist.Clear();
+        while (_stagedBatchQueue.TryDequeue(out _))
+        {
+        }
+        _stagedItemIds.Clear();
         _resolvedUrlCache.Clear();
 
         // 3) dispose what we own

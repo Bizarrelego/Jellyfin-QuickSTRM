@@ -76,7 +76,7 @@ public class QuickStrmController : ControllerBase
             {
                 IsRunning = isRunning,
                 ScanningLibrary = isScanning,
-                QueueCount = _probeService.HighPriorityQueueWaiting + _probeService.LowPriorityQueueWaiting,
+                QueueCount = _probeService.QueueCount,
                 ActiveCount = _probeService.ActiveCount,
                 ActiveProbes = _probeService.ActiveProbeNames.ToArray(),
                 TotalQueued = _probeService.TotalItems,

@@ -8,11 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 ## [4.2.13] - 2026-10-29
 
-### 🛡️ Autonomous Resilience Audit, Instant Event-Driven Ingestion & Universal Playback Payload Hardening
+### 🛡️ Autonomous Resilience Audit, Multi-Batch Queue Continuation & Jellyfin Enhanced Metadata Hardening
 
-Comprehensive resilience and playback hardening release implementing instant event-driven `.strm` ingestion (`ItemAdded` & `ItemUpdated`), 15 Mbps synthetic bitrate fallback persistence for Fire Stick 4K / ExoPlayer Direct Play, strict video/audio codec normalization (`h264`, `hevc`, `av1` / `aac`, `ac3`, `eac3`), unconditional URL query container overrides, and zero-leak concurrency guarantees across `SemaphoreSlim(4, 4)` and `ExecuteCoreProbeAsync`.
+Comprehensive resilience and playback hardening release implementing multi-batch queue continuation for large libraries (>500 items without dropping items or spamming queue warnings), full stream metadata enrichment (`DisplayTitle`, `Channels`, `ChannelLayout`, `Size`, `RunTimeTicks`, `BitRate`, normalized `Codec`) across `GetMediaStreams` and `GetStaticMediaSources` for UI plugins such as Jellyfin Enhanced, instant event-driven `.strm` ingestion (`ItemAdded` & `ItemUpdated`), 15 Mbps synthetic bitrate fallback persistence for Fire Stick 4K / ExoPlayer Direct Play, unconditional URL query container overrides, and zero-leak concurrency guarantees across `SemaphoreSlim(4, 4)` and `ExecuteCoreProbeAsync`.
 
 ### Added
+- **Multi-Batch Queue Continuation Without Dropping Items (`ProbeService.cs`)**:
+  - Eliminated the 500-item drop warning (`Persist queue full (500); dropping ...`) during full/incremental library scans and bulk imports.
+  - Added a deduplicated staged backlog queue (`_stagedBatchQueue` & `_stagedItemIds`) that automatically stages items beyond the active 500-item persistence channel and replenishes subsequent 500-item batches as the active batch drains until 100% of library items are probed.
+- **Complete Stream Metadata Enrichment for Jellyfin Enhanced & Web UI (`MediaSourceInterceptor.cs` & `ProbeService.cs`)**:
+  - Implemented `MediaSourceInterceptor.EnrichMediaStream` and enriched `GetMediaStreams(Guid)`, `GetMediaStreams(MediaStreamQuery)`, and `GetStaticMediaSources` so UI plugins like Jellyfin Enhanced immediately receive complete video/audio codecs, resolution (`Width`/`Height`), HDR/Dolby Vision ranges, audio `Channels` & `ChannelLayout` (e.g., `5.1`, `7.1`, `stereo`), `DisplayTitle`, `Size`, `Bitrate`, and `RunTimeTicks`.
 - **Instant New Media Ingestion (`ProbeService.cs` & `PluginConfiguration.cs`)**:
   - Subscribed to both `ILibraryManager.ItemAdded` and `ILibraryManager.ItemUpdated` events in `ProbeService.StartAsync` (with clean unsubscription in `StopAsync` and `Dispose`).
   - Enabled `EnableAutoProbe = true` by default so newly detected or updated `.strm` files are verified via `IsStrmFile(e.Item)` and immediately enqueued into the non-blocking background persistence channel without stalling Jellyfin's library scanner.
@@ -22,10 +27,12 @@ Comprehensive resilience and playback hardening release implementing instant eve
   - **Unconditional Query Container Override (`NormalizeContainer`)**: Ensures URL query parameters (`?extension=mp4`, `&extension=mkv`, `format=`, `ext=`) unconditionally override internal FFmpeg comma-separated container strings (`matroska,webm`, `mov,mp4,m4a,3gp,3g2,mj2`).
 - **Concurrency & Deadlock Hardening (`ProbeService.cs`)**:
   - Hardened `ProcessQueueLoopAsync` with `CancellationToken.None` on the worker `Task.Run` wrapper and `ReleaseQuietly(_probeThrottle)` in `try/finally` blocks so no code path can ever leak a `SemaphoreSlim(4, 4)` slot.
-  - Hardened `ExecuteCoreProbeAsync` and `HandleProbeStrikeFailureAsync` so 100% of network timeouts, `FfmpegException`s, JSON/format errors, and unexpected exceptions are caught locally, recorded as strikes in `_itemRetryCounts`, and never bubble up to the consumer loop.
-- **Automated Endurance & Playback Validation Suite (`EnduranceTests.cs`)**:
-  - Added `Simulate500ConcurrentItemAddedEvents_EnforcesStrictSemaphoreSlim4ConcurrencyLimit_FlatCpu_ZeroGen0DuringFlood` verifying strict 4-slot concurrency, flat CPU usage, and 0 Gen0 allocations during a 500-item concurrent flood.
-  - Added `PlaybackInfoRequest_UnprobedItem_ExecutesInlineProbe_CachesInMemory_PersistsToSqlite_CancelsInFlightVfsPrewarm_AndNormalizesPayload` verifying inline probing, memory caching, SQLite persistence, and immediate cancellation of in-flight `VfsPrewarmService` HTTP Range requests.
+  - Hardened `ExecuteCoreProbeAsync` and `HandleProbeStrikeFailureAsync` (including catching `MediaBrowser.Common.FfmpegException` without noisy stack traces) so 100% of network timeouts, `FfmpegException`s, JSON/format errors, and unexpected exceptions are caught locally, recorded as strikes in `_itemRetryCounts`, and never bubble up to the consumer loop.
+- **Automated Endurance, Multi-Batch & Jellyfin Enhanced Validation Suite (`EnduranceTests.cs`, `ProbeExecutionTests.cs`, `MediaSourceInterceptorTests.cs`)**:
+  - Added `QueueLibraryScanAsync_MoreThan500Items_StagesOverflowAndProcessesAllBatchesToCompletionWithoutDropping` verifying multi-batch continuation across 1,200 items.
+  - Added `JellyfinEnhanced_GetMediaStreamsAndGetStaticMediaSources_PopulatesCompleteCodecResolutionAndAudioChannelMetadata` verifying complete stream metadata and `DisplayTitle` for Jellyfin Enhanced.
+  - Added `JellyfinDiContainer_PluginServiceRegistrator_ResolvesAllServicesAndHooksWithoutCircularDependencies` verifying full Jellyfin DI resolution.
+  - Added `Simulate500ConcurrentItemAddedEvents_EnforcesStrictSemaphoreSlim4ConcurrencyLimit_FlatCpu_ZeroGen0DuringFlood` and `PlaybackInfoRequest_UnprobedItem_ExecutesInlineProbe_CachesInMemory_PersistsToSqlite_CancelsInFlightVfsPrewarm_AndNormalizesPayload`.
 
 ---
 ## [4.2.12] - 2026-10-23

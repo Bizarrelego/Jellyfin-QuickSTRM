@@ -681,6 +681,74 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         return c;
     }
 
+    /// <summary>
+    /// Enriches a <see cref="MediaStream"/> with normalized codec, sequential index, item association,
+    /// channel layout, and synthesized <see cref="MediaStream.DisplayTitle"/> so Jellyfin Web and UI plugins
+    /// such as Jellyfin Enhanced display resolution, HDR, codec, and audio channel badges accurately.
+    /// </summary>
+    public static void EnrichMediaStream(MediaStream stream, int index, Guid itemId = default)
+    {
+        if (stream is null)
+        {
+            return;
+        }
+
+        stream.Index = index;
+
+        if (!string.IsNullOrWhiteSpace(stream.Codec))
+        {
+            stream.Codec = NormalizeCodec(stream.Codec, stream.Type);
+        }
+
+        if (stream.Type == MediaStreamType.Audio)
+        {
+            if (!stream.Channels.HasValue || stream.Channels.Value <= 0)
+            {
+                if (!string.IsNullOrWhiteSpace(stream.ChannelLayout))
+                {
+                    if (stream.ChannelLayout.Contains("7.1", StringComparison.OrdinalIgnoreCase))
+                    {
+                        stream.Channels = 8;
+                    }
+                    else if (stream.ChannelLayout.Contains("5.1", StringComparison.OrdinalIgnoreCase))
+                    {
+                        stream.Channels = 6;
+                    }
+                    else if (stream.ChannelLayout.Contains("stereo", StringComparison.OrdinalIgnoreCase) ||
+                             stream.ChannelLayout.Contains("2.0", StringComparison.OrdinalIgnoreCase))
+                    {
+                        stream.Channels = 2;
+                    }
+                    else if (stream.ChannelLayout.Contains("mono", StringComparison.OrdinalIgnoreCase) ||
+                             stream.ChannelLayout.Contains("1.0", StringComparison.OrdinalIgnoreCase))
+                    {
+                        stream.Channels = 1;
+                    }
+                    else
+                    {
+                        stream.Channels = 2;
+                    }
+                }
+                else
+                {
+                    stream.Channels = 2;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(stream.ChannelLayout) && stream.Channels.HasValue)
+            {
+                stream.ChannelLayout = stream.Channels.Value switch
+                {
+                    1 => "mono",
+                    2 => "stereo",
+                    6 => "5.1",
+                    8 => "7.1",
+                    _ => $"{stream.Channels.Value}ch"
+                };
+            }
+        }
+    }
+
     public static void NormalizeMediaSourceInfo(MediaSourceInfo source)
     {
         if (source is null)
@@ -712,12 +780,10 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var totalStreamBitrate = 0;
         if (source.MediaStreams is not null && source.MediaStreams.Count > 0)
         {
-            foreach (var s in source.MediaStreams)
+            for (var i = 0; i < source.MediaStreams.Count; i++)
             {
-                if (!string.IsNullOrWhiteSpace(s.Codec))
-                {
-                    s.Codec = NormalizeCodec(s.Codec, s.Type);
-                }
+                var s = source.MediaStreams[i];
+                EnrichMediaStream(s, i);
 
                 if (s.BitRate.HasValue && s.BitRate.Value > 0)
                 {
@@ -938,8 +1004,8 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             }
         }
 
-        // Populate video/audio streams if source lacks a valid video stream
-        if (source.MediaStreams == null || source.MediaStreams.Count == 0 || !HasValidVideoStream(source.MediaStreams))
+        // Populate video/audio streams if source lacks complete video+audio streams
+        if (source.MediaStreams == null || source.MediaStreams.Count == 0 || !HasCompleteMediaStreams(source.MediaStreams))
         {
             var existingSubtitles = source.MediaStreams?.Where(s => s.Type == MediaStreamType.Subtitle).ToList();
 
@@ -975,7 +1041,8 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 }
             }
 
-            if (targetStreams is not null && targetStreams.Count > 0)
+            if (targetStreams is not null && targetStreams.Count > 0 &&
+                (source.MediaStreams == null || !HasValidVideoStream(source.MediaStreams) || HasCompleteMediaStreams(targetStreams)))
             {
                 var merged = new List<MediaStream>(targetStreams);
                 if (existingSubtitles is not null && existingSubtitles.Count > 0)
@@ -1104,10 +1171,64 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         => _inner.AddParts(providers);
 
     public IReadOnlyList<MediaStream> GetMediaStreams(Guid itemId)
-        => _inner.GetMediaStreams(itemId);
+    {
+        var streams = _inner.GetMediaStreams(itemId);
+        return EnrichAndFallbackStreams(itemId, streams);
+    }
 
     public IReadOnlyList<MediaStream> GetMediaStreams(MediaStreamQuery query)
-        => _inner.GetMediaStreams(query);
+    {
+        var streams = _inner.GetMediaStreams(query);
+        if (query is not null && query.ItemId != Guid.Empty && !query.Type.HasValue && !query.Index.HasValue)
+        {
+            return EnrichAndFallbackStreams(query.ItemId, streams);
+        }
+
+        if (streams is not null && streams.Count > 0)
+        {
+            var itemId = query?.ItemId ?? Guid.Empty;
+            for (var i = 0; i < streams.Count; i++)
+            {
+                EnrichMediaStream(streams[i], streams[i].Index >= 0 ? streams[i].Index : i, itemId);
+            }
+        }
+
+        return streams;
+    }
+
+    private IReadOnlyList<MediaStream> EnrichAndFallbackStreams(Guid itemId, IReadOnlyList<MediaStream> innerStreams)
+    {
+        var target = innerStreams;
+        if (itemId != Guid.Empty && (target is null || !HasCompleteMediaStreams(target)))
+        {
+            var probeService = _probeServiceFactory?.Invoke();
+            if (probeService is not null)
+            {
+                if (probeService.TryGetCachedProbeResult(itemId, out var cached) &&
+                    cached?.MediaStreams is not null &&
+                    (target is null || !HasValidVideoStream(target) || HasCompleteMediaStreams(cached.MediaStreams)))
+                {
+                    target = cached.MediaStreams;
+                }
+                else if (probeService.InMemoryStreams.TryGetValue(itemId, out var memStreams) &&
+                         memStreams is not null &&
+                         (target is null || !HasValidVideoStream(target) || HasCompleteMediaStreams(memStreams)))
+                {
+                    target = memStreams;
+                }
+            }
+        }
+
+        if (target is not null && target.Count > 0)
+        {
+            for (var i = 0; i < target.Count; i++)
+            {
+                EnrichMediaStream(target[i], i, itemId);
+            }
+        }
+
+        return target ?? Array.Empty<MediaStream>();
+    }
 
     public IReadOnlyList<MediaAttachment> GetMediaAttachments(Guid itemId)
         => _inner.GetMediaAttachments(itemId);
@@ -1128,6 +1249,8 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                     Path = item.Path,
                     Protocol = item.Path.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? MediaProtocol.Http : MediaProtocol.File,
                     Container = NormalizeContainer(item.Container, item.Path),
+                    RunTimeTicks = item.RunTimeTicks,
+                    Size = item.Size,
                     MediaStreams = new List<MediaStream>(),
                     Type = MediaSourceType.Default,
                     SupportsProbing = true,
@@ -1137,7 +1260,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                     SupportsTranscoding = true
                 };
                 var list = new List<MediaSourceInfo> { fallback };
-                EnsureStreamCapabilities(list, item.Id);
+                EnsureStreamCapabilities(list, item.Id, GetItemStreams(item));
                 foreach (var s in list)
                 {
                     SanitizeDefaultStreamIndices(s);
@@ -1145,9 +1268,25 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 return list;
             }
 
-            EnsureStreamCapabilities(sources, item?.Id);
+            var itemStreams = GetItemStreams(item);
+            EnsureStreamCapabilities(sources, item?.Id, itemStreams);
             foreach (var s in sources)
             {
+                if (item is not null)
+                {
+                    if ((!s.RunTimeTicks.HasValue || s.RunTimeTicks.Value <= 0) && item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0)
+                    {
+                        s.RunTimeTicks = item.RunTimeTicks.Value;
+                    }
+                    if ((!s.Size.HasValue || s.Size.Value <= 0) && item.Size.HasValue && item.Size.Value > 0)
+                    {
+                        s.Size = item.Size.Value;
+                    }
+                    if (!string.IsNullOrEmpty(item.Container))
+                    {
+                        s.Container = NormalizeContainer(s.Container ?? item.Container, s.Path);
+                    }
+                }
                 SanitizeDefaultStreamIndices(s);
             }
         }
