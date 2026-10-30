@@ -37,7 +37,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             sp.GetService<IMediaSourceManager>(),
             sp.GetService<AutoHealService>(),
             null,
-            sp.GetService<VfsPrewarmService>()));
+            sp.GetService<VfsPrewarmService>(),
+            sp.GetService<MediaBrowser.Controller.Persistence.IMediaStreamRepository>()));
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ProbeService>());
 
         // Register AutoHealService as singleton + hosted service for event-driven list pruning

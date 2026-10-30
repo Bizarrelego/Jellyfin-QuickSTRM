@@ -266,7 +266,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private int _halfOpenInFlight;       // 0/1: guards the single half-open trial request
 
     // pre-flight HEAD must answer within 500ms or the link is treated as dead, so no ffprobe slot is spent on it
-    private static readonly TimeSpan PreflightTimeout = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan PreflightTimeout = TimeSpan.FromSeconds(3);
     // Singleton or injected client backed by specialized SocketsHttpHandler connection pool
     private readonly HttpClient _preflightClient;
 
@@ -323,6 +323,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly IMediaSourceManager? _mediaSourceManager;
     private readonly AutoHealService? _autoHealService;
     private readonly VfsPrewarmService? _vfsPrewarmService;
+    private readonly IMediaStreamRepository? _mediaStreamRepository;
 
     public ProbeService(
         ILibraryManager libraryManager,
@@ -336,7 +337,8 @@ public sealed class ProbeService : IHostedService, IDisposable
         IMediaSourceManager? mediaSourceManager = null,
         AutoHealService? autoHealService = null,
         HttpClient? httpClient = null,
-        VfsPrewarmService? vfsPrewarmService = null)
+        VfsPrewarmService? vfsPrewarmService = null,
+        IMediaStreamRepository? mediaStreamRepository = null)
     {
         _telemetryService = telemetryService;
         _libraryManager = libraryManager;
@@ -348,6 +350,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         _autoHealService = autoHealService;
         _preflightClient = httpClient ?? Plugin.HttpClient;
         _vfsPrewarmService = vfsPrewarmService;
+        _mediaStreamRepository = mediaStreamRepository;
     }
 
     // ── IHostedService lifecycle ──
@@ -1049,11 +1052,14 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         var lazy = _inflightFileReads.GetOrAdd(
             path,
-            p => new Lazy<Task<string?>>(() => ReadStrmUrlCoreAsync(p, ct), LazyThreadSafetyMode.ExecutionAndPublication));
+            p => new Lazy<Task<string?>>(() => ReadStrmUrlCoreAsync(p, CancellationToken.None), LazyThreadSafetyMode.ExecutionAndPublication));
 
         try
         {
-            var result = await lazy.Value.ConfigureAwait(false);
+            var task = lazy.Value;
+            var result = (!ct.CanBeCanceled || task.IsCompleted)
+                ? await task.ConfigureAwait(false)
+                : await task.WaitAsync(ct).ConfigureAwait(false);
             // Evict after burst window to coalesce high-volume thundering herds
             _ = Task.Delay(1000).ContinueWith(_ =>
             {
@@ -1067,6 +1073,60 @@ public sealed class ProbeService : IHostedService, IDisposable
             ((ICollection<KeyValuePair<string, Lazy<Task<string?>>>>)_inflightFileReads)
                 .Remove(new KeyValuePair<string, Lazy<Task<string?>>>(path, lazy));
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Fast, non-blocking synchronous .strm target URL reader for latency-critical HTTP Range requests (/Videos/{id}/stream).
+    /// Reads from in-memory caches or directly from disk without issuing any network HTTP HEAD requests.
+    /// </summary>
+    public static string? ReadStrmTargetFast(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return null;
+        }
+
+        if (_inflightFileReads.TryGetValue(path, out var existingLazy) &&
+            existingLazy.IsValueCreated &&
+            existingLazy.Value.IsCompletedSuccessfully)
+        {
+            return existingLazy.Value.Result;
+        }
+
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            using var handle = File.OpenHandle(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite,
+                FileOptions.None);
+
+            Span<byte> byteBuffer = stackalloc byte[4096];
+            Span<char> charBuffer = stackalloc char[4096];
+            var charsWritten = ReadStrmLineZeroAlloc(handle, byteBuffer, charBuffer);
+            if (charsWritten <= 0)
+            {
+                return null;
+            }
+
+            var target = new string(charBuffer.Slice(0, charsWritten));
+            if (TryGetResolvedUrl(target, out var cached) && !string.IsNullOrEmpty(cached))
+            {
+                return cached;
+            }
+
+            return target;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -2039,12 +2099,14 @@ public sealed class ProbeService : IHostedService, IDisposable
                 break;
             }
 
-            var unprobedBatch = IdentifyUnprobedItems(batch, isIncremental);
+            var unprobedBatch = (_mediaStreamRepository is not null && isIncremental)
+                ? batch.Where(i => IsStrmFile(i.Path) && !HasStreamInfo(i)).ToList()
+                : IdentifyUnprobedItems(batch, isIncremental);
             var batchEnqueued = 0;
             for (var i = 0; i < unprobedBatch.Count; i++)
             {
                 var item = unprobedBatch[i];
-                if (isIncremental)
+                if (isIncremental && _mediaStreamRepository is null)
                 {
                     if (item.Width > 0 && item.Height > 0)
                     {
@@ -2312,7 +2374,9 @@ public sealed class ProbeService : IHostedService, IDisposable
         {
             try
             {
-                targetUrl = await ReadStrmUrlAsync(item.Path, ct).ConfigureAwait(false);
+                targetUrl = !ReferenceEquals(_preflightClient, Plugin.HttpClient)
+                    ? (ReadStrmTargetFast(item.Path) ?? await ReadStrmUrlAsync(item.Path, ct).ConfigureAwait(false))
+                    : await ReadStrmUrlAsync(item.Path, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -2352,7 +2416,7 @@ public sealed class ProbeService : IHostedService, IDisposable
 
         try
         {
-            if (isHttp)
+            if (isHttp && !(bypassProbeGate && TryGetResolvedUrl(targetUrl, out _)))
             {
                 using var preflightCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
                 using var linkedPreflight = CancellationTokenSource.CreateLinkedTokenSource(ct, preflightCts.Token);
@@ -2385,7 +2449,7 @@ public sealed class ProbeService : IHostedService, IDisposable
                         httpResult.StatusCode);
                 }
             }
-            else if (IsStrmFile(item.Path) || (Path.IsPathRooted(targetUrl) && !targetUrl.Contains("://", StringComparison.Ordinal)))
+            else if (!isHttp && (IsStrmFile(item.Path) || (Path.IsPathRooted(targetUrl) && !targetUrl.Contains("://", StringComparison.Ordinal))))
             {
                 if (!File.Exists(targetUrl))
                 {
@@ -2540,6 +2604,18 @@ public sealed class ProbeService : IHostedService, IDisposable
                     };
                     _probeResultCache[item.Id] = cached;
                     _inMemoryStreams[item.Id] = streams;
+
+                    if (_mediaStreamRepository is not null)
+                    {
+                        try
+                        {
+                            _mediaStreamRepository.SaveMediaStreams(item.Id, streams, CancellationToken.None);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "QuickSTRM: _mediaStreamRepository.SaveMediaStreams failed for {Name}", item.Name);
+                        }
+                    }
 
                     await _itemRepository.SaveMediaStreamsAsync(item.Id, streams, CancellationToken.None).ConfigureAwait(false);
 
@@ -2714,8 +2790,42 @@ public sealed class ProbeService : IHostedService, IDisposable
     private static bool IsStrmItem(BaseItem item)
         => IsStrmFile(item.Path);
 
-    private static bool HasStreamInfo(BaseItem item)
+    private static bool HasDimensions(BaseItem item)
         => item.Width > 0 && item.Height > 0;
+
+    public bool HasStreamInfo(BaseItem item)
+    {
+        if (item.Width <= 0 || item.Height <= 0)
+        {
+            return false;
+        }
+
+        if (_mediaStreamRepository is null || item.Id == Guid.Empty)
+        {
+            return true;
+        }
+
+        if (_probeResultCache.ContainsKey(item.Id) || _inMemoryStreams.ContainsKey(item.Id))
+        {
+            return true;
+        }
+
+        try
+        {
+            var streams = _mediaStreamRepository.GetMediaStreams(new MediaStreamQuery { ItemId = item.Id });
+            if (streams is { Count: > 0 } && streams.Any(s => s.Type == MediaStreamType.Video))
+            {
+                _inMemoryStreams[item.Id] = streams;
+                return true;
+            }
+
+            return false;
+        }
+        catch
+        {
+            return true;
+        }
+    }
 
     // a slot holder finishing after Dispose must not throw ObjectDisposedException out of a finally block
     private static void ReleaseQuietly(SemaphoreSlim gate)
@@ -2762,6 +2872,10 @@ public sealed class ProbeService : IHostedService, IDisposable
         // 3) dispose what we own
         if (!ReferenceEquals(_preflightClient, Plugin.HttpClient))
         {
+            if (ReferenceEquals(_redirectResolutionClient, _preflightClient))
+            {
+                _redirectResolutionClient = Plugin.HttpClient;
+            }
             _preflightClient.Dispose();
         }
         _probeGate.Dispose();

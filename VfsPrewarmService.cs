@@ -123,6 +123,22 @@ public class VfsPrewarmService : IDisposable
             {
                 cts = found;
             }
+            foreach (var kvp in _activePrewarms)
+            {
+                try
+                {
+                    kvp.Value.Cancel();
+                    kvp.Value.Dispose();
+                }
+                catch
+                {
+                }
+            }
+            _activePrewarms.Clear();
+            if (found is not null)
+            {
+                cts = found;
+            }
         }
 
         if (cts is not null)
@@ -186,6 +202,13 @@ public class VfsPrewarmService : IDisposable
             if (nextEpisode is not null)
             {
                 item = nextEpisode;
+                id = nextEpisode.Id;
+                itemId = id.ToString("N");
+                if (_cache.TryGetValue(itemId, out _))
+                {
+                    return;
+                }
+                _cache.Set(itemId, true, DefaultCacheOptions);
             }
         }
 

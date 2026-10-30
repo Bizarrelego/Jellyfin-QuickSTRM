@@ -93,10 +93,15 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         string targetUrl = null;
         try
         {
-            targetUrl = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
+            targetUrl = ProbeService.ReadStrmTargetFast(item.Path) ?? await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
+        }
+
+        if (string.IsNullOrWhiteSpace(targetUrl))
+        {
+            targetUrl = ProbeService.ReadStrmTargetFast(item.Path);
         }
 
         var effectivePath = !string.IsNullOrWhiteSpace(targetUrl) ? targetUrl : item.Path;
@@ -137,6 +142,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         CachedProbeResult cachedProbe = null;
         if (probeService is not null && item.Id != Guid.Empty)
         {
+            probeService.CancelPrewarm(item.Id);
             probeService.TryGetCachedProbeResult(item.Id, out cachedProbe);
         }
 
@@ -166,7 +172,8 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             if (item.Id != Guid.Empty && _recentInlineProbeAttempts.TryGetValue(item.Id, out var lastAttempt))
             {
                 var elapsed = now - lastAttempt;
-                if (elapsed < TimeSpan.FromSeconds(30))
+                var cooldownWindow = allowMediaProbe ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(15);
+                if (elapsed < cooldownWindow)
                 {
                     onCooldown = true;
                     _logger.LogDebug(
@@ -288,7 +295,18 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         }
 
         // only this rare first-play path pays for an async state machine, because it must await the capped probe
-        return await ProbeThenResolveAsync(item, user, sources, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
+        if (probeService is not null && !HasValidVideoStream(itemStreams))
+        {
+            try
+            {
+                probeService.EnqueueBackgroundPersist(item, highPriority: true);
+            }
+            catch
+            {
+            }
+        }
+
+        return sources;
     }
 
     private async Task<IReadOnlyList<MediaSourceInfo>> ProbeThenResolveAsync(
@@ -810,7 +828,20 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             source.Protocol = MediaProtocol.Http;
             source.IsRemote = true;
         }
-        else if (source.Protocol == MediaProtocol.Http)
+        if (!string.IsNullOrEmpty(source.Path) && ProbeService.IsStrmFile(source.Path))
+        {
+            var fastTarget = ProbeService.ReadStrmTargetFast(source.Path);
+            if (!string.IsNullOrWhiteSpace(fastTarget))
+            {
+                source.Path = fastTarget;
+                var isFastHttp = fastTarget.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                                 fastTarget.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+                source.Protocol = isFastHttp ? MediaProtocol.Http : MediaProtocol.File;
+                source.IsRemote = isFastHttp;
+            }
+        }
+
+        if (source.Protocol == MediaProtocol.Http)
         {
             source.IsRemote = true;
         }
@@ -1378,7 +1409,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             {
                 try
                 {
-                    var target = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
+                    var target = ProbeService.ReadStrmTargetFast(item.Path) ?? await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(target))
                     {
                         source.Path = target;
@@ -1400,7 +1431,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             string target = null;
             try
             {
-                target = await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
+                target = ProbeService.ReadStrmTargetFast(item.Path) ?? await ProbeService.ReadStrmUrlAsync(item.Path, cancellationToken).ConfigureAwait(false);
             }
             catch
             {
