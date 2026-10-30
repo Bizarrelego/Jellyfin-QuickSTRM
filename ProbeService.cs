@@ -86,6 +86,11 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// </summary>
     public bool IsScanningLibrary => Volatile.Read(ref _isScanningLibrary) == 1;
 
+    /// <summary>
+    /// Gets the Jellyfin library manager instance.
+    /// </summary>
+    public ILibraryManager LibraryManager => _libraryManager;
+
     // protects memory: one entry per queued/running item ID (not per request), so N repeated play attempts of the same item
     // occupy exactly one slot instead of N parked tasks, each of which would otherwise pin a BaseItem and a closure in RAM
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _pendingPersist = new();

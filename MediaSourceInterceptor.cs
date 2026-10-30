@@ -1256,23 +1256,46 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
     public IReadOnlyList<MediaStream> GetMediaStreams(Guid itemId)
     {
         var streams = _inner.GetMediaStreams(itemId);
+        if (itemId == Guid.Empty)
+        {
+            return streams;
+        }
+
+        var probeService = _probeServiceFactory?.Invoke();
+        var item = probeService?.LibraryManager?.GetItemById(itemId);
+        if (item is null || !ProbeService.IsStrmFile(item.Path))
+        {
+            return streams;
+        }
+
         return EnrichAndFallbackStreams(itemId, streams);
     }
 
     public IReadOnlyList<MediaStream> GetMediaStreams(MediaStreamQuery query)
     {
         var streams = _inner.GetMediaStreams(query);
-        if (query is not null && query.ItemId != Guid.Empty && !query.Type.HasValue && !query.Index.HasValue)
+        if (query is null || query.ItemId == Guid.Empty)
+        {
+            return streams;
+        }
+
+        var probeService = _probeServiceFactory?.Invoke();
+        var item = probeService?.LibraryManager?.GetItemById(query.ItemId);
+        if (item is null || !ProbeService.IsStrmFile(item.Path))
+        {
+            return streams;
+        }
+
+        if (!query.Type.HasValue && !query.Index.HasValue)
         {
             return EnrichAndFallbackStreams(query.ItemId, streams);
         }
 
         if (streams is not null && streams.Count > 0)
         {
-            var itemId = query?.ItemId ?? Guid.Empty;
             for (var i = 0; i < streams.Count; i++)
             {
-                EnrichMediaStream(streams[i], streams[i].Index >= 0 ? streams[i].Index : i, itemId);
+                EnrichMediaStream(streams[i], streams[i].Index >= 0 ? streams[i].Index : i, query.ItemId);
             }
         }
 
@@ -1494,7 +1517,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
     public bool SupportsDirectStream(string path, MediaProtocol protocol)
     {
-        if (protocol == MediaProtocol.Http || ProbeService.IsStrmFile(path))
+        if (ProbeService.IsStrmFile(path))
         {
             return true;
         }
