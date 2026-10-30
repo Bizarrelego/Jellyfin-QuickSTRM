@@ -589,8 +589,9 @@
                         if (progressBar) { progressBar.classList.add('indeterminate'); }
                     } else {
                         if (progressBar) { progressBar.classList.remove('indeterminate'); }
+                        var remaining = queueCount + activeCount;
+                        if (remaining > (v._qsState.probeTotalCount || 0)) { v._qsState.probeTotalCount = remaining; }
                         if (v._qsState.probeTotalCount > 0) {
-                            var remaining = queueCount + activeCount;
                             var processed = Math.max(0, v._qsState.probeTotalCount - remaining);
                             var pct = Math.min(100, Math.round((processed / v._qsState.probeTotalCount) * 100));
                             if (progressBar) { progressBar.style.width = pct + '%'; }
@@ -624,6 +625,7 @@
                         }
                     }
                 } else {
+                    v._qsState.probeTotalCount = 0;
                     restoreProbeButton();
                     if (btnStart) { btnStart.style.display = 'inline-flex'; }
                     if (btnCancelScan) { btnCancelScan.style.display = 'none'; }

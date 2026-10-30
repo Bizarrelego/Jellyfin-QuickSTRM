@@ -646,7 +646,8 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 return "h264";
             }
 
-            return c;
+            var spaceOrParen = c.IndexOfAny([' ', '(']);
+            return spaceOrParen > 0 ? c[..spaceOrParen] : c;
         }
 
         if (streamType == MediaStreamType.Audio)
@@ -675,10 +676,12 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 return "aac";
             }
 
-            return c;
+            var spaceOrParen = c.IndexOfAny([' ', '(']);
+            return spaceOrParen > 0 ? c[..spaceOrParen] : c;
         }
 
-        return c;
+        var idx = c.IndexOfAny([' ', '(']);
+        return idx > 0 ? c[..idx] : c;
     }
 
     /// <summary>
@@ -758,9 +761,14 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         if (!string.IsNullOrEmpty(source.Path) &&
             (source.Path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-             source.Path.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+             source.Path.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+             ProbeService.IsStrmFile(source.Path)))
         {
             source.Protocol = MediaProtocol.Http;
+            source.IsRemote = true;
+        }
+        else if (source.Protocol == MediaProtocol.Http)
+        {
             source.IsRemote = true;
         }
         else
@@ -1247,10 +1255,12 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 {
                     Id = item.Id.ToString("N"),
                     Path = item.Path,
-                    Protocol = item.Path.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? MediaProtocol.Http : MediaProtocol.File,
+                    Protocol = MediaProtocol.Http,
+                    IsRemote = true,
                     Container = NormalizeContainer(item.Container, item.Path),
                     RunTimeTicks = item.RunTimeTicks,
                     Size = item.Size,
+                    Bitrate = 15_000_000,
                     MediaStreams = new List<MediaStream>(),
                     Type = MediaSourceType.Default,
                     SupportsProbing = true,
@@ -1263,6 +1273,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 EnsureStreamCapabilities(list, item.Id, GetItemStreams(item));
                 foreach (var s in list)
                 {
+                    NormalizeMediaSourceInfo(s);
                     SanitizeDefaultStreamIndices(s);
                 }
                 return list;
@@ -1287,6 +1298,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                         s.Container = NormalizeContainer(s.Container ?? item.Container, s.Path);
                     }
                 }
+                NormalizeMediaSourceInfo(s);
                 SanitizeDefaultStreamIndices(s);
             }
         }

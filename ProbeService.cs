@@ -113,7 +113,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, Task<MediaInfo?>> _inflightProbes = new();
 
     // Concurrency throttle preventing more than 4 concurrent ffprobe streams against Usenet sockets / Kestrel thread pool
-    private static readonly SemaphoreSlim _probeThrottle = new(4, 4);
+    private readonly SemaphoreSlim _probeThrottle = new(4, 4);
 
     // Active probe item names currently inside the probe throttle
     private readonly ConcurrentDictionary<Guid, string> _activeProbeNames = new();
@@ -141,6 +141,7 @@ public sealed class ProbeService : IHostedService, IDisposable
         new BoundedChannelOptions(MaxPendingPersist) { FullMode = BoundedChannelFullMode.DropWrite });
     private readonly List<Task> _workerTasks = new();
     private readonly object _workerLock = new();
+    private int _activeConsumerWorkers;
     private readonly IItemRepository? _itemRepository;
 
     /// <summary>
@@ -148,7 +149,7 @@ public sealed class ProbeService : IHostedService, IDisposable
     /// </summary>
     public void EnsureConsumerRunning()
     {
-        if (_shutdownCts.IsCancellationRequested)
+        if (_shutdownCts.IsCancellationRequested || Volatile.Read(ref _activeConsumerWorkers) >= MaxConcurrentProbes)
         {
             return;
         }
@@ -156,9 +157,20 @@ public sealed class ProbeService : IHostedService, IDisposable
         lock (_workerLock)
         {
             _workerTasks.RemoveAll(static t => t.IsCompleted);
-            while (_workerTasks.Count < MaxConcurrentProbes)
+            while (Volatile.Read(ref _activeConsumerWorkers) < MaxConcurrentProbes)
             {
-                _workerTasks.Add(Task.Run(() => ProcessQueueLoopAsync(_shutdownCts.Token)));
+                Interlocked.Increment(ref _activeConsumerWorkers);
+                _workerTasks.Add(Task.Run(async () =>
+                {
+                    try
+                    {
+                        await ProcessQueueLoopAsync(_shutdownCts.Token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _activeConsumerWorkers);
+                    }
+                }));
             }
         }
     }
@@ -390,8 +402,7 @@ public sealed class ProbeService : IHostedService, IDisposable
             return;
         }
 
-        var item = e.Item;
-        if (item is null || !IsStrmFile(item) || HasStreamInfo(item))
+        if (e.Item is not Video item || !IsStrmFile(item) || HasStreamInfo(item))
         {
             return;
         }
