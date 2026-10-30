@@ -123,7 +123,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 SupportsDirectPlay = true,
                 SupportsDirectStream = true,
                 SupportsTranscoding = true,
-                IsRemote = isHttp && !IsLocalOrPrivateUrl(effectivePath),
+                IsRemote = isHttp,
                 ReadAtNativeFramerate = false,
                 RunTimeTicks = item.RunTimeTicks,
                 Bitrate = 15_000_000
@@ -234,7 +234,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             {
                 s.Path = targetUrl;
                 s.Protocol = (targetUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || targetUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) ? MediaProtocol.Http : MediaProtocol.File;
-                s.IsRemote = s.Protocol == MediaProtocol.Http && !IsLocalOrPrivateUrl(targetUrl);
+                s.IsRemote = s.Protocol == MediaProtocol.Http;
             }
 
             if (cachedProbe?.RunTimeTicks.HasValue == true && cachedProbe.RunTimeTicks.Value > 0)
@@ -808,11 +808,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
              ProbeService.IsStrmFile(source.Path)))
         {
             source.Protocol = MediaProtocol.Http;
-            source.IsRemote = !IsLocalOrPrivateUrl(source.Path);
+            source.IsRemote = true;
         }
         else if (source.Protocol == MediaProtocol.Http)
         {
-            source.IsRemote = !IsLocalOrPrivateUrl(source.Path);
+            source.IsRemote = true;
         }
         else
         {
@@ -1300,7 +1300,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                     Id = item.Id.ToString("N"),
                     Path = item.Path,
                     Protocol = MediaProtocol.Http,
-                    IsRemote = !IsLocalOrPrivateUrl(item.Path),
+                    IsRemote = true,
                     Container = NormalizeContainer(item.Container, item.Path),
                     RunTimeTicks = item.RunTimeTicks,
                     Size = item.Size,
@@ -1323,12 +1323,32 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 return list;
             }
 
+            string targetUrl = null;
+            try
+            {
+                if (System.IO.File.Exists(item.Path))
+                {
+                    targetUrl = System.IO.File.ReadAllText(item.Path).Trim();
+                }
+            }
+            catch
+            {
+            }
+
             var itemStreams = GetItemStreams(item);
             EnsureStreamCapabilities(sources, item?.Id, itemStreams);
             foreach (var s in sources)
             {
                 if (item is not null)
                 {
+                    s.Id = item.Id.ToString("N");
+                    if (!string.IsNullOrWhiteSpace(targetUrl))
+                    {
+                        s.Path = targetUrl;
+                        s.Protocol = (targetUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || targetUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) ? MediaProtocol.Http : MediaProtocol.File;
+                        s.IsRemote = s.Protocol == MediaProtocol.Http;
+                    }
+
                     if ((!s.RunTimeTicks.HasValue || s.RunTimeTicks.Value <= 0) && item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0)
                     {
                         s.RunTimeTicks = item.RunTimeTicks.Value;
@@ -1354,7 +1374,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         var source = await _inner.GetMediaSource(item, mediaSourceId, liveStreamId, enablePathSubstitution, cancellationToken).ConfigureAwait(false);
         if (source is not null && ProbeService.IsStrmFile(item?.Path))
         {
-            if (source.Path?.EndsWith(".strm", StringComparison.OrdinalIgnoreCase) == true)
+            if (string.IsNullOrWhiteSpace(source.Path) || source.Path?.EndsWith(".strm", StringComparison.OrdinalIgnoreCase) == true)
             {
                 try
                 {
@@ -1363,13 +1383,15 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                     {
                         source.Path = target;
                         source.Protocol = target.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? MediaProtocol.Http : MediaProtocol.File;
-                        source.IsRemote = source.Protocol == MediaProtocol.Http && !IsLocalOrPrivateUrl(source.Path);
+                        source.IsRemote = source.Protocol == MediaProtocol.Http;
                     }
                 }
                 catch
                 {
                 }
             }
+            source.Id = item.Id.ToString("N");
+            NormalizeMediaSourceInfo(source);
             EnsureStreamCapabilities(source, item?.Id);
             SanitizeDefaultStreamIndices(source);
         }
@@ -1400,11 +1422,12 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 SupportsDirectPlay = true,
                 SupportsDirectStream = true,
                 SupportsTranscoding = true,
-                IsRemote = isHttp && !IsLocalOrPrivateUrl(effectivePath),
+                IsRemote = isHttp,
                 ReadAtNativeFramerate = false,
                 RunTimeTicks = item.RunTimeTicks,
                 Bitrate = 15_000_000
             };
+            NormalizeMediaSourceInfo(source);
             EnsureStreamCapabilities(source, item.Id);
             SanitizeDefaultStreamIndices(source);
         }
@@ -1439,7 +1462,13 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         => _inner.GetLiveStreamMediaInfo(id, cancellationToken);
 
     public bool SupportsDirectStream(string path, MediaProtocol protocol)
-        => _inner.SupportsDirectStream(path, protocol);
+    {
+        if (protocol == MediaProtocol.Http || ProbeService.IsStrmFile(path))
+        {
+            return true;
+        }
+        return _inner.SupportsDirectStream(path, protocol);
+    }
 
     public MediaProtocol GetPathProtocol(string path)
         => _inner.GetPathProtocol(path);
