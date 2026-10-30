@@ -926,14 +926,18 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         selectedAudio ??= source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Audio && s.IsDefault)
                           ?? source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Audio);
 
+        var subtitleExplicitlyDisabled = source.DefaultSubtitleStreamIndex.HasValue && source.DefaultSubtitleStreamIndex.Value < 0;
         MediaStream selectedSubtitle = null;
-        if (source.DefaultSubtitleStreamIndex.HasValue)
+        if (!subtitleExplicitlyDisabled)
         {
-            var idx = source.DefaultSubtitleStreamIndex.Value;
-            selectedSubtitle = source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Subtitle && s.Index == idx);
+            if (source.DefaultSubtitleStreamIndex.HasValue)
+            {
+                var idx = source.DefaultSubtitleStreamIndex.Value;
+                selectedSubtitle = source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Subtitle && s.Index == idx);
+            }
+            selectedSubtitle ??= source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Subtitle && s.IsDefault)
+                                 ?? source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Subtitle);
         }
-        selectedSubtitle ??= source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Subtitle && s.IsDefault)
-                             ?? source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Subtitle);
 
         // 2. Ensure all stream indices in the collection are strictly sequential and 0-based
         for (var i = 0; i < source.MediaStreams.Count; i++)
@@ -946,9 +950,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             ? selectedAudio.Index
             : null;
 
-        source.DefaultSubtitleStreamIndex = selectedSubtitle is not null && selectedSubtitle.Index >= 0 && selectedSubtitle.Index < source.MediaStreams.Count
-            ? selectedSubtitle.Index
-            : null;
+        source.DefaultSubtitleStreamIndex = subtitleExplicitlyDisabled
+            ? -1
+            : (selectedSubtitle is not null && selectedSubtitle.Index >= 0 && selectedSubtitle.Index < source.MediaStreams.Count
+                ? selectedSubtitle.Index
+                : null);
     }
 
     public static bool HasValidVideoStream(IReadOnlyList<MediaStream> streams)

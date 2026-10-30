@@ -2,12 +2,27 @@
     data-require="emby-input,emby-button,emby-select,emby-checkbox" data-controller="__plugin/QuickStrm.js">
     <div class="content-primary" style="max-width: 980px; margin: 0 auto; padding: 1.5em 1em;">
         <style>
+            /* ── Global Theme & Card Surfaces ── */
+            #QuickStrmConfigPage {
+                font-family: system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+                color: #f1f5f9;
+            }
+
+            #QuickStrmConfigPage .paperList {
+                background: rgba(15, 23, 42, 0.65) !important;
+                border: 1px solid rgba(255, 255, 255, 0.08) !important;
+                border-radius: 10px !important;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25) !important;
+                backdrop-filter: blur(10px) !important;
+            }
+
+            /* ── Executive Segmented Tab Bar ── */
             .quickstrm-tab-bar {
                 display: flex;
                 gap: 0.6em;
                 margin-bottom: 1.8em;
-                border-bottom: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));
-                padding-bottom: 0.8em;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                padding-bottom: 0.9em;
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
                 scrollbar-width: none;
@@ -18,54 +33,170 @@
             }
 
             .quickstrm-tab-btn {
-                background: var(--card-background, rgba(255, 255, 255, 0.04));
-                border: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));
-                border-radius: 20px;
-                padding: 0.55em 1.25em;
-                font-size: 0.9em;
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 9999px;
+                padding: 0.6em 1.35em;
+                font-size: 0.88em;
                 font-weight: 600;
-                color: var(--text-muted-color, #aaa);
+                color: #94a3b8;
                 cursor: pointer;
                 display: inline-flex;
                 align-items: center;
-                gap: 0.5em;
+                gap: 0.55em;
                 white-space: nowrap;
-                transition: all 0.2s ease;
+                transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
                 outline: none;
+                user-select: none;
+            }
+
+            .quickstrm-tab-btn:hover {
+                background: rgba(255, 255, 255, 0.08);
+                border-color: rgba(255, 255, 255, 0.16);
+                color: #f8fafc;
+                transform: translateY(-1px);
+            }
+
+            .quickstrm-tab-btn.active {
+                background: linear-gradient(135deg, #00a4dc 0%, #0084b0 100%) !important;
+                color: #ffffff !important;
+                border-color: #00a4dc !important;
+                box-shadow: 0 4px 14px rgba(0, 164, 220, 0.38) !important;
             }
 
             .quickstrm-tab-btn .material-icons,
             .sectionTitle .material-icons,
             .emby-button .material-icons {
-                margin-right: 0.45em !important;
+                margin-right: 0.35em !important;
                 vertical-align: middle;
             }
 
-            .quickstrm-url-group {
-                display: flex;
-                gap: 8px;
-                align-items: stretch;
+            /* ── High-Contrast Form Labels & Inputs ── */
+            .selectLabel, .inputLabel, label.inputLabel, label.selectLabel {
+                display: block !important;
+                font-size: 0.86em !important;
+                font-weight: 600 !important;
+                color: #f1f5f9 !important;
+                margin-bottom: 0.45em !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+                position: static !important;
+                transform: none !important;
+                letter-spacing: 0.01em !important;
             }
 
-            .quickstrm-url-group input {
-                height: 42px !important;
-                margin: 0 !important;
+            .fieldDescription {
+                font-size: 0.82em !important;
+                color: #94a3b8 !important;
+                line-height: 1.45 !important;
+                margin-top: 0.35em !important;
             }
 
-            .quickstrm-url-group button {
-                height: 42px !important;
-                margin: 0 !important;
+            .emby-input, .emby-select, select.emby-select, input[type=text].emby-input {
+                background: rgba(11, 15, 25, 0.75) !important;
+                border: 1px solid rgba(255, 255, 255, 0.12) !important;
+                border-radius: 6px !important;
+                color: #f8fafc !important;
+                font-size: 0.88em !important;
+                height: 40px !important;
+                padding: 0 0.85em !important;
+                box-sizing: border-box !important;
+                transition: border-color 0.2s, box-shadow 0.2s !important;
+            }
+
+            .emby-input:focus, .emby-select:focus, select.emby-select:focus {
+                border-color: #00a4dc !important;
+                box-shadow: 0 0 0 2px rgba(0, 164, 220, 0.25) !important;
+                outline: none !important;
+            }
+
+            /* ── Buttons ── */
+            .emby-button.raised {
+                border-radius: 6px !important;
+                font-weight: 600 !important;
+                font-size: 0.86em !important;
+                letter-spacing: 0.02em !important;
+                transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease !important;
                 display: inline-flex !important;
                 align-items: center !important;
                 justify-content: center !important;
+                box-sizing: border-box !important;
             }
 
+            .emby-button.raised:hover {
+                transform: translateY(-1px) !important;
+            }
+
+            .emby-button.button-submit,
+            .raised.button-submit {
+                background: linear-gradient(135deg, #00a4dc 0%, #0084b0 100%) !important;
+                color: #ffffff !important;
+                box-shadow: 0 2px 8px rgba(0, 164, 220, 0.3) !important;
+            }
+
+            .emby-button.button-submit:hover {
+                box-shadow: 0 4px 12px rgba(0, 164, 220, 0.45) !important;
+            }
+
+            /* ── Metrics Grid (Tab 1) ── */
+            .quickstrm-metrics-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+                gap: 1em;
+                margin-bottom: 1.8em;
+            }
+
+            .quickstrm-metric-card {
+                background: rgba(18, 24, 38, 0.7) !important;
+                border: 1px solid rgba(255, 255, 255, 0.08) !important;
+                border-radius: 10px !important;
+                padding: 1.25em 1em !important;
+                text-align: center !important;
+                box-sizing: border-box !important;
+                position: relative !important;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+                transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease !important;
+            }
+
+            .quickstrm-metric-card:hover {
+                transform: translateY(-2px) !important;
+                border-color: rgba(0, 164, 220, 0.3) !important;
+                box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3) !important;
+            }
+
+            .quickstrm-metric-title {
+                font-size: 0.74em;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                color: #94a3b8;
+                margin-bottom: 0.4em;
+            }
+
+            .quickstrm-metric-value {
+                font-size: 1.8em;
+                font-weight: 800;
+                line-height: 1.2;
+                color: #00a4dc;
+            }
+
+            .quickstrm-metric-sub {
+                font-size: 0.74em;
+                color: #64748b;
+                margin-top: 0.35em;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                font-weight: 500;
+            }
+
+            /* ── Controls Bar ── */
             .quickstrm-controls-bar {
                 display: flex;
                 flex-wrap: wrap;
                 gap: 12px;
                 align-items: flex-end;
-                margin-top: 1.2em;
+                margin-top: 1.4em;
             }
 
             .quickstrm-controls-bar .selectContainer {
@@ -75,268 +206,56 @@
             }
 
             .quickstrm-controls-bar select {
-                height: 42px !important;
+                height: 40px !important;
             }
 
             .quickstrm-controls-bar button {
-                height: 42px !important;
+                height: 40px !important;
                 margin: 0 !important;
             }
 
-            .quickstrm-feature-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-                gap: 1em;
-                margin-top: 0.8em;
+            .quickstrm-url-group {
+                display: flex;
+                gap: 8px;
+                align-items: stretch;
             }
 
-            .quickstrm-feature-card {
-                background: rgba(255, 255, 255, 0.03);
-                border: 1px solid var(--line-color, rgba(255, 255, 255, 0.06));
-                border-radius: 6px;
-                padding: 1em;
-                font-size: 0.85em;
-                line-height: 1.5;
+            .quickstrm-url-group input {
+                height: 40px !important;
+                margin: 0 !important;
             }
 
-            .quickstrm-tab-btn:hover {
-                background: rgba(255, 255, 255, 0.08);
-                color: var(--text-color, #fff);
-                transform: translateY(-1px);
+            .quickstrm-url-group button {
+                height: 40px !important;
+                margin: 0 !important;
             }
 
-            .quickstrm-tab-btn.active {
-                background: var(--theme-primary-color, #00a4dc);
-                color: #fff;
-                border-color: var(--theme-primary-color, #00a4dc);
-                box-shadow: 0 2px 10px rgba(0, 164, 220, 0.35);
-            }
-
-            .quickstrm-metrics-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-                gap: 1em;
-                margin-bottom: 1.8em;
-            }
-
-            .quickstrm-metric-card {
-                background: var(--card-background, rgba(255, 255, 255, 0.04));
-                border: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));
-                border-radius: var(--border-radius-card, 8px);
-                padding: 1.2em 1em;
-                text-align: center;
-                box-sizing: border-box;
-                position: relative;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
-                transition: transform 0.2s ease, box-shadow 0.2s ease;
-            }
-
-            .quickstrm-metric-card:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.25);
-            }
-
-            .quickstrm-metric-title {
-                font-size: 0.78em;
-                font-weight: 600;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-                color: var(--text-muted-color, #999);
-                margin-bottom: 0.4em;
-            }
-
-            .quickstrm-metric-value {
-                font-size: 1.7em;
-                font-weight: 700;
-                line-height: 1.2;
-                color: var(--theme-primary-color, #00a4dc);
-            }
-
-            .quickstrm-metric-sub {
-                font-size: 0.75em;
-                color: var(--text-muted-color, #888);
-                margin-top: 0.35em;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-
-            .quickstrm-arr-card {
-                background: var(--card-background, rgba(255, 255, 255, 0.03));
-                border: 1px solid var(--line-color, rgba(255, 255, 255, 0.08));
-                border-radius: 8px;
-                padding: 1.2em;
-                margin-bottom: 1em;
-                transition: border-color 0.2s ease, box-shadow 0.2s ease;
-            }
-
-            .quickstrm-arr-card:hover {
-                border-color: rgba(255, 255, 255, 0.16);
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-            }
-
+            /* ── Badges ── */
             .quickstrm-badge {
                 display: inline-flex;
                 align-items: center;
                 gap: 0.3em;
                 padding: 0.25em 0.65em;
                 border-radius: 4px;
-                font-size: 0.75em;
-                font-weight: 600;
+                font-size: 0.72em;
+                font-weight: 700;
                 text-transform: uppercase;
-                letter-spacing: 0.03em;
+                letter-spacing: 0.04em;
             }
 
-            .quickstrm-badge-green,
-            .badge.sync-status.synced {
-                background: rgba(76, 175, 80, 0.2);
-                color: #81c784;
-                border: 1px solid #4caf50;
-            }
-
-            .quickstrm-badge-red,
-            .badge.sync-status.unsynced {
-                background: rgba(244, 67, 54, 0.2);
-                color: #e57373;
-                border: 1px solid #f44336;
-            }
-
-            .quickstrm-badge-radarr {
-                background: rgba(33, 150, 243, 0.15);
-                color: #64b5f6;
-                border: 1px solid #2196f3;
-            }
-
-            .quickstrm-badge-sonarr {
-                background: rgba(0, 188, 212, 0.15);
-                color: #4dd0e1;
-                border: 1px solid #00bcd4;
-            }
-
-            .quickstrm-badge-whisparr {
-                background: rgba(156, 39, 176, 0.15);
-                color: #ba68c8;
-                border: 1px solid #9c27b0;
-            }
-
-            .quickstrm-card-error-callout {
-                margin-top: 0.9em;
-                padding: 0.75em 1em;
-                background: rgba(244, 67, 54, 0.12);
-                border-left: 3px solid #f44336;
-                border-radius: 4px;
-                font-size: 0.85em;
-                color: #ffcdd2;
-                line-height: 1.4;
-            }
-
-            .quickstrm-warning-banner {
-                background: rgba(255, 152, 0, 0.15);
-                border: 1px solid #ff9800;
-                border-radius: 6px;
-                padding: 0.8em 1em;
-                margin-top: 0.8em;
-                margin-bottom: 1.2em;
-                color: #ffe0b2;
-                font-size: 0.88em;
+            /* ── Toggle Switches (Tab 3) ── */
+            .qs-switch-row {
                 display: flex;
                 align-items: center;
-                gap: 0.6em;
-            }
-
-            .quickstrm-inline-feedback {
-                margin-top: 1em;
-                padding: 0.8em 1em;
+                justify-content: space-between;
+                padding: 1em 0.5em !important;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 6px;
-                font-size: 0.88em;
-                display: flex;
-                align-items: center;
-                gap: 0.6em;
+                transition: background 0.15s ease;
             }
 
-            .quickstrm-inline-feedback.success {
-                background: rgba(76, 175, 80, 0.15);
-                border: 1px solid #4caf50;
-                color: #c8e6c9;
-            }
-
-            .quickstrm-inline-feedback.error {
-                background: rgba(244, 67, 54, 0.15);
-                border: 1px solid #f44336;
-                color: #ffcdd2;
-            }
-
-            .quickstrm-form-row {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 1em;
-                margin-bottom: 1em;
-            }
-
-            .quickstrm-tab-panel,
-            .quickstrm-tab-content {
-                display: none;
-            }
-
-            .quickstrm-tab-panel.active,
-            .quickstrm-tab-content.active {
-                display: block;
-            }
-
-            @keyframes quickstrm-spin {
-                0% {
-                    transform: rotate(0deg);
-                }
-
-                100% {
-                    transform: rotate(360deg);
-                }
-            }
-
-            .quickstrm-btn-spinner,
-            .quickstrm-spinner {
-                display: inline-block;
-                width: 14px;
-                height: 14px;
-                border: 2px solid rgba(255, 255, 255, 0.3);
-                border-top-color: white;
-                border-radius: 50%;
-                animation: quickstrm-spin 0.8s linear infinite;
-                vertical-align: middle;
-                margin-right: 0.4em;
-                box-sizing: border-box;
-            }
-
-            @keyframes quickstrm-indeterminate {
-                0% {
-                    transform: translateX(-100%);
-                    width: 30%;
-                }
-
-                50% {
-                    transform: translateX(100%);
-                    width: 60%;
-                }
-
-                100% {
-                    transform: translateX(350%);
-                    width: 30%;
-                }
-            }
-
-            .taskProgress {
-                position: relative;
-                overflow: hidden;
-            }
-
-            .taskProgressInner {
-                transition: width 0.25s ease;
-                transform: none;
-            }
-
-            .taskProgressInner.indeterminate {
-                width: 30% !important;
-                animation: quickstrm-indeterminate 1.5s infinite linear;
+            .qs-switch-row:hover {
+                background: rgba(255, 255, 255, 0.02);
             }
 
             .qs-switch {
@@ -367,82 +286,88 @@
 
             .qs-slider:before {
                 position: absolute;
-                content: "";
-                height: 18px;
-                width: 18px;
-                left: 3px;
-                bottom: 3px;
-                background-color: white;
-                transition: .25s ease;
-                border-radius: 50%;
-            }
+                content: ";
+ height: 18px;
+ width: 18px;
+ left: 3px;
+ bottom: 3px;
+ background-color: white;
+ transition: .25s ease;
+ border-radius: 50%;
+ }
 
-            input:checked+.qs-slider {
-                background-color: var(--theme-primary-color, #00a4dc);
-            }
+ input:checked+.qs-slider {
+ background-color: #00a4dc;
+ }
 
-            input:checked+.qs-slider:before {
-                transform: translateX(20px);
-            }
+ input:checked+.qs-slider:before {
+ transform: translateX(20px);
+ }
 
-            .qs-saved-badge {
-                font-size: 0.72em;
-                font-weight: 600;
-                color: #81c784;
-                background: rgba(76, 175, 80, 0.15);
-                border: 1px solid rgba(76, 175, 80, 0.3);
-                border-radius: 4px;
-                padding: 0.15em 0.55em;
-                opacity: 0;
-                transition: opacity 0.25s ease;
-                letter-spacing: 0.03em;
-            }
+ .qs-saved-badge {
+ font-size: 0.72em;
+ font-weight: 600;
+ color: #81c784;
+ background: rgba(76, 175, 80, 0.15);
+ border: 1px solid rgba(76, 175, 80, 0.3);
+ border-radius: 4px;
+ padding: 0.18em 0.55em;
+ opacity: 0;
+ transition: opacity 0.25s ease;
+ letter-spacing: 0.03em;
+ }
 
-            .qs-saved-badge.visible {
-                opacity: 1;
-            }
+ .qs-saved-badge.visible {
+ opacity: 1;
+ }
 
-            .qs-checkbox-row {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                cursor: pointer;
-                user-select: none;
-                padding: 8px 0;
-            }
+ .qs-checkbox-row {
+ display: flex;
+ align-items: center;
+ gap: 10px;
+ cursor: pointer;
+ user-select: none;
+ padding: 8px 0;
+ }
 
-            .qs-checkbox {
-                width: 18px;
-                height: 18px;
-                accent-color: #00a4dc;
-                cursor: pointer;
-                opacity: 1 !important;
-                position: static !important;
-                pointer-events: auto !important;
-            }
+ .qs-checkbox {
+ width: 18px;
+ height: 18px;
+ accent-color: #00a4dc;
+ cursor: pointer;
+ opacity: 1 !important;
+ position: static !important;
+ pointer-events: auto !important;
+ }
 
-            @media (max-width: 720px) {
-                .quickstrm-metrics-grid {
-                    grid-template-columns: 1fr;
-                }
+ .quickstrm-form-row {
+ display: grid;
+ grid-template-columns: 1fr 1fr;
+ gap: 1.2em;
+ margin-bottom: 1em;
+ }
 
-                .quickstrm-form-row {
-                    grid-template-columns: 1fr;
-                    gap: 0.8em;
-                }
+ .quickstrm-tab-panel,
+ .quickstrm-tab-content {
+ display: none;
+ }
 
-                .quickstrm-card-header {
-                    flex-direction: column;
-                    align-items: flex-start !important;
-                }
+ .quickstrm-tab-panel.active,
+ .quickstrm-tab-content.active {
+ display: block;
+ }
 
-                .quickstrm-card-actions {
-                    width: 100%;
-                    margin-top: 0.8em;
-                    justify-content: flex-start !important;
-                }
-            }
-        </style>
+ @media (max-width: 720px) {
+ .quickstrm-metrics-grid {
+ grid-template-columns: 1fr;
+ }
+
+ .quickstrm-form-row {
+ grid-template-columns: 1fr;
+ gap: 0.8em;
+ }
+ }
+</style>
 
         <!-- Page Header -->
         <div class="verticalSection" style="margin-bottom: 1.5em;">
@@ -970,7 +895,7 @@
                     </div>
 
                     <div class="inputContainer" style="margin-top: 1.5em; margin-bottom: 0.5em;">
-                        <label class="inputLabel inputLabelUnfocused" for="txtMountMarkerFileName">Mount Marker File Name (Optional)</label>
+                        <label class="inputLabel" for="txtMountMarkerFileName">Mount Marker File Name (Optional)</label>
                         <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input" placeholder="e.g. .mount_ok" />
                         <div class="fieldDescription">A verification file that must exist on your cloud mount (e.g.
                             .mount_ok). Traverses up to 5 parent folders above each .strm. If missing, failures are

@@ -28,6 +28,13 @@ Comprehensive resilience and playback hardening release implementing multi-batch
 - **Concurrency & Deadlock Hardening (`ProbeService.cs`)**:
   - Hardened `ProcessQueueLoopAsync` with `CancellationToken.None` on the worker `Task.Run` wrapper and `ReleaseQuietly(_probeThrottle)` in `try/finally` blocks so no code path can ever leak a `SemaphoreSlim(4, 4)` slot.
   - Hardened `ExecuteCoreProbeAsync` and `HandleProbeStrikeFailureAsync` (including catching `MediaBrowser.Common.FfmpegException` without noisy stack traces) so 100% of network timeouts, `FfmpegException`s, JSON/format errors, and unexpected exceptions are caught locally, recorded as strikes in `_itemRetryCounts`, and never bubble up to the consumer loop.
+- **Subtitle Burn-In Lock & Pause/Resume Rejection Prevention (`MediaSourceInterceptor.cs`)**:
+  - Honored client requests with `SubtitleStreamIndex = -1` (explicitly disabled subtitles) in `SanitizeDefaultStreamIndices`, preserving `-1` and preventing unintended fallback to default internal ASS subtitles which caused Jellyfin's `MediaInfoHelper` to reject Direct Play / Direct Stream on Moonfin and web clients.
+  - Guaranteed 100% complete bypass of QuickSTRM interception pipelines for all downloaded and local non-.strm media, delegating directly to the underlying `IMediaSourceManager`.
+- **Management Suite Dashboard Overhaul (`configPage.html` & `configPage.js`)**:
+  - Enhanced all three tabs (`Overview & Probing`, `Auto-Heal Lists`, `Maintenance & Advanced`) with high-contrast readable typography, dark glassmorphism card surfaces, and executive segmented pill navigation.
+  - Added interactive Library Probe Coverage bar with live percentage, probed stream totals, and missing stream breakdowns.
+  - Added explicit Mount Marker File label, input placeholder, and dedicated Save Configuration button with visual confirmation feedback.
 - **Automated Endurance, Multi-Batch & Jellyfin Enhanced Validation Suite (`EnduranceTests.cs`, `ProbeExecutionTests.cs`, `MediaSourceInterceptorTests.cs`)**:
   - Added `QueueLibraryScanAsync_MoreThan500Items_StagesOverflowAndProcessesAllBatchesToCompletionWithoutDropping` verifying multi-batch continuation across 1,200 items.
   - Added `JellyfinEnhanced_GetMediaStreamsAndGetStaticMediaSources_PopulatesCompleteCodecResolutionAndAudioChannelMetadata` verifying complete stream metadata and `DisplayTitle` for Jellyfin Enhanced.
