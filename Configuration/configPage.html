@@ -1,5 +1,5 @@
 <div id="QuickStrmConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
-    data-controller="__plugin/QuickStrm.js">
+    data-require="emby-input,emby-button,emby-select,emby-checkbox" data-controller="__plugin/QuickStrm.js">
     <div class="content-primary" style="max-width: 980px; margin: 0 auto; padding: 1.5em 1em;">
         <style>
             .quickstrm-tab-bar {
@@ -32,6 +32,71 @@
                 white-space: nowrap;
                 transition: all 0.2s ease;
                 outline: none;
+            }
+
+            .quickstrm-tab-btn .material-icons,
+            .sectionTitle .material-icons,
+            .emby-button .material-icons {
+                margin-right: 0.45em !important;
+                vertical-align: middle;
+            }
+
+            .quickstrm-url-group {
+                display: flex;
+                gap: 8px;
+                align-items: stretch;
+            }
+
+            .quickstrm-url-group input {
+                height: 42px !important;
+                margin: 0 !important;
+            }
+
+            .quickstrm-url-group button {
+                height: 42px !important;
+                margin: 0 !important;
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+            }
+
+            .quickstrm-controls-bar {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px;
+                align-items: flex-end;
+                margin-top: 1.2em;
+            }
+
+            .quickstrm-controls-bar .selectContainer {
+                min-width: 220px;
+                flex: 1;
+                margin-bottom: 0 !important;
+            }
+
+            .quickstrm-controls-bar select {
+                height: 42px !important;
+            }
+
+            .quickstrm-controls-bar button {
+                height: 42px !important;
+                margin: 0 !important;
+            }
+
+            .quickstrm-feature-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                gap: 1em;
+                margin-top: 0.8em;
+            }
+
+            .quickstrm-feature-card {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid var(--line-color, rgba(255, 255, 255, 0.06));
+                border-radius: 6px;
+                padding: 1em;
+                font-size: 0.85em;
+                line-height: 1.5;
             }
 
             .quickstrm-tab-btn:hover {
@@ -547,9 +612,30 @@
                 </div>
 
                 <!-- Controls: Mode Selector & Buttons -->
-                <div style="display: flex; flex-wrap: wrap; gap: 1em; align-items: center; margin-top: 1.2em;">
-                    <div class="selectContainer" style="min-width: 200px; flex: 1;">
-                        <select is="emby-select" id="selectProbeMode" class="emby-select" label="Probe Mode">
+                <!-- Library Probe Coverage Bar -->
+                <div class="quickstrm-coverage-card" style="background: rgba(0, 0, 0, 0.25); border: 1px solid var(--line-color, rgba(255, 255, 255, 0.08)); border-radius: 8px; padding: 1.2em; margin-bottom: 1.4em;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.6em;">
+                        <div style="font-size: 0.92em; font-weight: 600; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.4em;">
+                            <span class="material-icons" style="font-size: 1.1em; color: #4caf50;">insights</span>
+                            <span>Library Probed Coverage</span>
+                        </div>
+                        <div id="lblCoveragePercent" style="font-size: 1.35em; font-weight: 700; color: #4caf50;">-</div>
+                    </div>
+                    <div style="height: 8px; background: rgba(255, 255, 255, 0.08); border-radius: 4px; overflow: hidden; position: relative;">
+                        <div id="barCoverage" style="height: 100%; width: 0%; background: linear-gradient(90deg, #00a4dc, #4caf50); border-radius: 4px; transition: width 0.4s ease;"></div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 0.6em; font-size: 0.82em; color: var(--text-muted-color, #888);">
+                        <span><strong id="lblProbedSummary" style="color: #4caf50;">-</strong> Probed</span>
+                        <span><strong id="lblUnprobedSummary" style="color: #ff9800;">-</strong> Missing</span>
+                        <span><strong id="lblTotalSummary" style="color: var(--text-color, #fff);">-</strong> Total</span>
+                    </div>
+                </div>
+
+                <!-- Controls: Mode Selector & Buttons -->
+                <div class="quickstrm-controls-bar">
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="selectProbeMode">Probe Mode</label>
+                        <select is="emby-select" id="selectProbeMode" class="emby-select">
                             <option value="Incremental">Incremental probe</option>
                             <option value="All">All items (Full probe)</option>
                         </select>
@@ -674,7 +760,7 @@
                             </div>
                             <div class="inputContainer" style="margin-bottom: 0.8em;">
                                 <label class="inputLabel" for="txtRadarrFeedUrl">Radarr List URL</label>
-                                <div style="display: flex; gap: 6px; align-items: center;">
+                                <div class="quickstrm-url-group">
                                     <input is="emby-input" type="text" id="txtRadarrFeedUrl" readonly class="emby-input"
                                         style="flex: 1; font-family: monospace; font-size: 0.85em; background: rgba(0,0,0,0.4);" />
                                     <button is="emby-button" type="button" id="btnCopyRadarrUrl"
@@ -719,7 +805,7 @@
                             </div>
                             <div class="inputContainer" style="margin-bottom: 0.8em;">
                                 <label class="inputLabel" for="txtSonarrFeedUrl">Sonarr List URL</label>
-                                <div style="display: flex; gap: 6px; align-items: center;">
+                                <div class="quickstrm-url-group">
                                     <input is="emby-input" type="text" id="txtSonarrFeedUrl" readonly class="emby-input"
                                         style="flex: 1; font-family: monospace; font-size: 0.85em; background: rgba(0,0,0,0.4);" />
                                     <button is="emby-button" type="button" id="btnCopySonarrUrl"
@@ -817,7 +903,7 @@
                         <div style="flex: 1; padding-right: 1.5em;">
                             <div
                                 style="font-weight: 600; font-size: 0.95em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 0.6em;">
-                                <span>Enable 3:00 AM Proactive Sweeper</span>
+                                <span>Enable Instant Auto-Probe &amp; 3:00 AM Proactive Sweeper</span>
                                 <span id="badgeSavedSweeper" class="qs-saved-badge">Saved</span>
                             </div>
                             <div class="fieldDescription" style="margin-top: 0.3em;">Automatically probes new .strm
@@ -883,12 +969,21 @@
                         </label>
                     </div>
 
-                    <div class="inputContainer" style="margin-top: 1.2em; margin-bottom: 0.5em;">
-                        <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input"
-                            label="Mount Marker File Name (Optional)" />
+                    <div class="inputContainer" style="margin-top: 1.5em; margin-bottom: 0.5em;">
+                        <label class="inputLabel inputLabelUnfocused" for="txtMountMarkerFileName">Mount Marker File Name (Optional)</label>
+                        <input is="emby-input" type="text" id="txtMountMarkerFileName" class="emby-input" placeholder="e.g. .mount_ok" />
                         <div class="fieldDescription">A verification file that must exist on your cloud mount (e.g.
                             .mount_ok). Traverses up to 5 parent folders above each .strm. If missing, failures are
                             treated as a dropped mount and deletion is suppressed.</div>
+                    </div>
+
+                    <!-- Visible Save Configuration Button -->
+                    <div style="margin-top: 1.5em; display: flex; align-items: center; gap: 1em; flex-wrap: wrap;">
+                        <button is="emby-button" type="button" id="btnSaveConfig" class="raised button-submit emby-button" style="margin: 0; min-width: 160px; height: 42px;">
+                            <span class="material-icons" style="font-size: 1.1em; margin-right: 0.4em;">save</span>
+                            <span>Save Configuration</span>
+                        </button>
+                        <span id="badgeSavedConfig" class="qs-saved-badge" style="font-size: 0.85em; padding: 0.4em 0.8em;">Configuration Saved Successfully</span>
                     </div>
 
                     <!-- Hidden alias to preserve backward compatibility if needed -->

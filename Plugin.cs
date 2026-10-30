@@ -72,6 +72,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             new PluginPageInfo
             {
                 Name = Name,
+                DisplayName = "QuickSTRM",
                 EmbeddedResourcePath = ns + ".Configuration.configPage.html",
                 EnableInMainMenu = true,
                 MenuSection = "server",

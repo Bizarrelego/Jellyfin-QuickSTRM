@@ -119,10 +119,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 Type = MediaSourceType.Default,
                 SupportsProbing = true,
                 RequiresOpening = false,
+                RequiresClosing = false,
                 SupportsDirectPlay = true,
                 SupportsDirectStream = true,
                 SupportsTranscoding = true,
-                IsRemote = isHttp,
+                IsRemote = isHttp && !IsLocalOrPrivateUrl(effectivePath),
                 ReadAtNativeFramerate = false,
                 RunTimeTicks = item.RunTimeTicks,
                 Bitrate = 15_000_000
@@ -233,7 +234,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
             {
                 s.Path = targetUrl;
                 s.Protocol = (targetUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || targetUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) ? MediaProtocol.Http : MediaProtocol.File;
-                s.IsRemote = s.Protocol == MediaProtocol.Http;
+                s.IsRemote = s.Protocol == MediaProtocol.Http && !IsLocalOrPrivateUrl(targetUrl);
             }
 
             if (cachedProbe?.RunTimeTicks.HasValue == true && cachedProbe.RunTimeTicks.Value > 0)
@@ -546,6 +547,48 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
         return null;
     }
 
+    public static bool IsLocalOrPrivateUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        var host = uri.Host;
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            host.Equals("127.0.0.1", StringComparison.Ordinal) ||
+            host.Equals("::1", StringComparison.Ordinal) ||
+            host.EndsWith(".lan", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".local", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".internal", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (System.Net.IPAddress.TryParse(host, out var ip))
+        {
+            var bytes = ip.GetAddressBytes();
+            if (bytes.Length == 4)
+            {
+                // 10.0.0.0/8
+                if (bytes[0] == 10) return true;
+                // 172.16.0.0/12
+                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return true;
+                // 192.168.0.0/16
+                if (bytes[0] == 192 && bytes[1] == 168) return true;
+                // 127.0.0.0/8
+                if (bytes[0] == 127) return true;
+            }
+        }
+
+        return false;
+    }
+
     public static string NormalizeContainer(string container, string path = null)
     {
         // URL query parameter (?extension=mp4 or &extension=mkv) absolutely overrides any internal FFmpeg comma-separated container string
@@ -765,11 +808,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
              ProbeService.IsStrmFile(source.Path)))
         {
             source.Protocol = MediaProtocol.Http;
-            source.IsRemote = true;
+            source.IsRemote = !IsLocalOrPrivateUrl(source.Path);
         }
         else if (source.Protocol == MediaProtocol.Http)
         {
-            source.IsRemote = true;
+            source.IsRemote = !IsLocalOrPrivateUrl(source.Path);
         }
         else
         {
@@ -779,6 +822,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
 
         source.Container = NormalizeContainer(source.Container, source.Path);
         source.RequiresOpening = false;
+        source.RequiresClosing = false;
         source.SupportsProbing = true;
         source.SupportsDirectPlay = true;
         source.SupportsDirectStream = true;
@@ -1256,7 +1300,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                     Id = item.Id.ToString("N"),
                     Path = item.Path,
                     Protocol = MediaProtocol.Http,
-                    IsRemote = true,
+                    IsRemote = !IsLocalOrPrivateUrl(item.Path),
                     Container = NormalizeContainer(item.Container, item.Path),
                     RunTimeTicks = item.RunTimeTicks,
                     Size = item.Size,
@@ -1319,7 +1363,7 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                     {
                         source.Path = target;
                         source.Protocol = target.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? MediaProtocol.Http : MediaProtocol.File;
-                        source.IsRemote = source.Protocol == MediaProtocol.Http;
+                        source.IsRemote = source.Protocol == MediaProtocol.Http && !IsLocalOrPrivateUrl(source.Path);
                     }
                 }
                 catch
@@ -1352,10 +1396,11 @@ public sealed class MediaSourceInterceptor : IMediaSourceManager, IDisposable
                 Type = MediaSourceType.Default,
                 SupportsProbing = true,
                 RequiresOpening = false,
+                RequiresClosing = false,
                 SupportsDirectPlay = true,
                 SupportsDirectStream = true,
                 SupportsTranscoding = true,
-                IsRemote = isHttp,
+                IsRemote = isHttp && !IsLocalOrPrivateUrl(effectivePath),
                 ReadAtNativeFramerate = false,
                 RunTimeTicks = item.RunTimeTicks,
                 Bitrate = 15_000_000

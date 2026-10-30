@@ -83,6 +83,8 @@
         var chkNextEp = view.querySelector('#chkEnableNextEpisodePreWarm');
         var chkChapters = view.querySelector('#chkSynthesizeVirtualChapters');
         var txtMarker = view.querySelector('#txtMountMarkerFileName');
+        var btnSaveConfig = view.querySelector('#btnSaveConfig');
+        var badgeSavedConfig = view.querySelector('#badgeSavedConfig');
         var tabButtons = view.querySelectorAll('.quickstrm-tab-btn');
         var tabContents = view.querySelectorAll('.quickstrm-tab-content');
 
@@ -559,6 +561,19 @@
 
                 if (statPrewarmedCount) { statPrewarmedCount.textContent = prewarmedCount; }
 
+                // Library Probe Coverage Bar Calculation
+                var coveragePercent = totalStrm > 0 ? Math.min(100, Math.round((probedCount / totalStrm) * 1000) / 10) : 100;
+                var lblCoveragePercent = v.querySelector('#lblCoveragePercent');
+                var barCoverage = v.querySelector('#barCoverage');
+                var lblProbedSummary = v.querySelector('#lblProbedSummary');
+                var lblUnprobedSummary = v.querySelector('#lblUnprobedSummary');
+                var lblTotalSummary = v.querySelector('#lblTotalSummary');
+                if (lblCoveragePercent) { lblCoveragePercent.textContent = coveragePercent + '%'; }
+                if (barCoverage) { barCoverage.style.width = coveragePercent + '%'; }
+                if (lblProbedSummary) { lblProbedSummary.textContent = probedCount; }
+                if (lblUnprobedSummary) { lblUnprobedSummary.textContent = unprobedStrm; }
+                if (lblTotalSummary) { lblTotalSummary.textContent = totalStrm; }
+
                 // Persistence Queue Summary
                 if (lblQueue) { lblQueue.textContent = queueCount + activeCount; }
                 if (lblQueueDetail) { lblQueueDetail.textContent = queueCount + ' waiting / ' + activeCount + ' running'; }
@@ -800,6 +815,8 @@
                 var chkNextEp = view.querySelector('#chkEnableNextEpisodePreWarm');
                 var chkChapters = view.querySelector('#chkSynthesizeVirtualChapters');
                 var txtMarker = view.querySelector('#txtMountMarkerFileName');
+        var btnSaveConfig = view.querySelector('#btnSaveConfig');
+        var badgeSavedConfig = view.querySelector('#badgeSavedConfig');
 
                 if (chkSweeper) { chkSweeper.checked = !!config.EnableAutoProbe; }
                 if (chkAutoHeal) { chkAutoHeal.checked = !!config.EnableAutoDelete; }
@@ -1157,6 +1174,23 @@
         if (btnRefreshLedger) {
             btnRefreshLedger.addEventListener('click', function () {
                 loadLedger();
+            });
+        }
+
+                if (btnSaveConfig) {
+            btnSaveConfig.addEventListener('click', function (e) {
+                e.preventDefault();
+                btnSaveConfig.disabled = true;
+                saveConfiguration(false, view).then(function () {
+                    btnSaveConfig.disabled = false;
+                    if (badgeSavedConfig) {
+                        badgeSavedConfig.classList.add('visible');
+                        setTimeout(function () { badgeSavedConfig.classList.remove('visible'); }, 2500);
+                    }
+                }).catch(function (err) {
+                    btnSaveConfig.disabled = false;
+                    showAlert('Failed to save settings: ' + extractErrorMessage(err));
+                });
             });
         }
 
